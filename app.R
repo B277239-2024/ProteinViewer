@@ -1,6 +1,10 @@
 library(shiny)
 library(httr)
 library(jsonlite)
+library(DT)
+library(r3dmol)
+library(shinycssloaders)
+library(bio3d)
 
 # Define UI for application
 ui <- fluidPage(
@@ -12,7 +16,21 @@ ui <- fluidPage(
     sidebarLayout(
         sidebarPanel(
             textInput("pid", "Enter UniProt ID"),
-            actionButton("fetch", "Fetch info")
+            actionButton("fetch", "Fetch info"), 
+            hr(),
+            
+            # Select the style of 3D structure
+            selectInput("set_style", "Choose Structure Style",
+                        choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
+                        selected = "Cartoon"),
+            
+            # 3D structure spin
+            checkboxInput("spin", "Spin Structure", value = FALSE),
+            checkboxInput("surface", "Show Surface", value = FALSE),
+            # show labels
+            # checkboxInput("labels", "Show Labels on Selected", value = FALSE),
+            # highlight selected residues
+            # actionButton("selectSpheres", "Highlight Selected Residues")
         ),
 
         # Show a plot of the generated distribution
@@ -83,6 +101,8 @@ server <- function(input, output, session) {
             h4("GnomAD Summary"),
             uiOutput("gnomad_summary"),
             h4("AlphaFold 3D Structure"),
+            withSpinner(r3dmolOutput("structure_view", height = "500px")),
+            br(),
             downloadButton("download_pdb", "Download PDB File")
         )
     })
@@ -212,6 +232,29 @@ server <- function(input, output, session) {
         }
     }
     
+    # 3D structure with r3dmol
+    output$structure_view <- renderR3dmol({
+        req(input$pid)
+        
+        shiny::validate(
+            need(nzchar(input$pid), "Please enter a UniProt ID.")
+        )
+        
+        pdb_url <- m_bio3d(bio3d::read.pdb(paste0("https://alphafold.ebi.ac.uk/files/AF-",input$pid,"-F1-model_v4.pdb")))
+        
+        r3dmol(
+            viewer_spec = m_viewer_spec(backgroundColor = "white", 
+                                        cartoonQuality = 25,
+                                        lowerZoomLimit = 5,
+                                        upperZoomLimit = 1000)
+        ) %>%
+            m_add_model(data = pdb_url, format = "pdb") %>%
+            m_set_style(style = m_style_cartoon(color = "spectrum")) %>%
+            m_zoom_to()
+    })
+    
+    
+    
     # Download PDB button
     output$download_pdb <- downloadHandler(
         filename = function() {
@@ -238,6 +281,28 @@ server <- function(input, output, session) {
             download.file(pdb_url, destfile = file, mode = "wb")
         }
     )
+    
+    observeEvent(input$set_style, {
+        style <- switch(input$set_style,
+                        "Line" = list(line = list()),
+                        "Cartoon" = list(cartoon = list()),
+                        "Stick" = list(stick = list()),
+                        "Cross" = list(cross = list()),
+                        "Sphere" = list(sphere = list()))
+        m_set_style(id = "structure_view", style = style)
+    })
+    
+    observeEvent(input$spin, {
+        m_spin(id = "structure_view", speed = ifelse(input$spin, 0.3, 0))
+    })
+    
+    observeEvent(input$surface, {
+        if (input$surface) {
+            m_add_surface(id = "structure_view", style = m_style_surface(opacity = 0.4))
+        } else {
+            m_remove_all_surfaces(id = "structure_view")
+        }
+    })
 }
 
 # Run the application 
