@@ -100,6 +100,8 @@ server <- function(input, output, session) {
             tableOutput("domain_table"),
             h4("GnomAD Summary"),
             uiOutput("gnomad_summary"),
+            h4("GnomAD Variant Table"),
+            DT::dataTableOutput("gnomad_table"),
             h4("AlphaFold 3D Structure"),
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
@@ -179,18 +181,9 @@ server <- function(input, output, session) {
             Variant_ID  = vars$variant_id,
             Position    = vars$pos,
             Consequence = vars$consequence,
-            AF = sapply(vars$exome, function(x) {
-                if (is.null(x) || !is.list(x)) return(NA_real_)
-                if (!is.null(x$af)) x$af else NA_real_
-            }),
-            AC = sapply(vars$exome, function(x) {
-                if (is.null(x) || !is.list(x)) return(NA_integer_)
-                if (!is.null(x$ac)) x$ac else NA_integer_
-            }),
-            AN = sapply(vars$exome, function(x) {
-                if (is.null(x) || !is.list(x)) return(NA_integer_)
-                if (!is.null(x$an)) x$an else NA_integer_
-            })
+            AF = vars$exome$af,
+            AC = vars$exome$ac,
+            AN = vars$exome$an
         )
         
         df
@@ -217,6 +210,37 @@ server <- function(input, output, session) {
             tags$ul(consequence_list)
         )
     })
+    
+    # Gnomad data table display by DT
+    output$gnomad_table <- DT::renderDT({
+        data <- protein_data()
+        df <- get_gnomad_df(data)
+        
+        if (is.null(df) || nrow(df) == 0) return(NULL)
+        
+        DT::datatable(
+            df,
+            rownames = FALSE,
+            filter = "top",
+            extensions = 'Buttons',
+            options = list(
+                pageLength = 10,
+                lengthMenu = c(10, 25, 50),
+                autoWidth = TRUE,
+                dom = 'lBfrtip',
+                buttons = c('excel', 'pdf', 'csv')
+            ),
+            colnames = c(
+                "Variant ID" = "Variant_ID",
+                "Position" = "Position",
+                "Consequence" = "Consequence",
+                "Allele Freq" = "AF",
+                "Allele Count" = "AC",
+                "Allele Number" = "AN"
+            ),
+            escape = FALSE
+        )
+    }, server = FALSE)
     
     # Alphafold API function
     fetch_alphafold_prediction <- function(uniprot_id) {
