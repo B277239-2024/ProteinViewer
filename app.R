@@ -5,6 +5,7 @@ library(DT)
 library(r3dmol)
 library(shinycssloaders)
 library(bio3d)
+library(ggplot2)
 
 # Define UI for application
 ui <- fluidPage(
@@ -18,6 +19,8 @@ ui <- fluidPage(
             textInput("pid", "Enter UniProt ID"),
             actionButton("fetch", "Fetch info"), 
             hr(),
+            
+            uiOutput("transcript_selector"),
             
             # Select the style of 3D structure
             selectInput("set_style", "Choose Structure Style",
@@ -60,11 +63,14 @@ fetch_gnomad_by_gene <- function(gene_symbol) {
                     variant_id
                     pos
                     consequence
+                    transcript_id
+                    hgvsp
                     exome {
                         af
                         ac
                         an
                     }
+                        
             }
         }
     }'
@@ -102,6 +108,8 @@ server <- function(input, output, session) {
             uiOutput("gnomad_summary"),
             h4("GnomAD Variant Table"),
             DT::dataTableOutput("gnomad_table"),
+            h4("1D Plot"),
+            plotOutput("variant_1dplot"),
             h4("AlphaFold 3D Structure"),
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
@@ -118,6 +126,26 @@ server <- function(input, output, session) {
         } else {
             NULL
         }
+    })
+    
+    # Get the transcripts ID from gnomAD
+    output$transcript_selector <- renderUI({
+        data <- protein_data()
+        req(data)
+        
+        gene_symbol <- tryCatch(data$genes[[1]]$geneName$value, error = function(e) NULL)
+        if (is.null(gene_symbol)) return(helpText("No gene symbol."))
+        
+        gnomad_data <- fetch_gnomad_by_gene(gene_symbol)
+        if (is.null(gnomad_data)) return(helpText("Failed to fetch gnomAD."))
+        
+        vars <- tryCatch(gnomad_data$data$gene$variants, error = function(e) NULL)
+        if (is.null(vars)) return(helpText("No variant data."))
+        
+        tx_ids <- unique(na.omit(vars$transcript_id))
+        if (length(tx_ids) == 0) return(helpText("No transcript IDs found."))
+        
+        selectInput("selected_transcript", "Select Transcript", choices = tx_ids)
     })
     
     # Basic info output
@@ -166,6 +194,13 @@ server <- function(input, output, session) {
         }
     })
     
+    # function to extract amino acid position
+    extract_aa_position <- function(hgvsp) {
+        if (is.na(hgvsp) || hgvsp == "") return(NA)
+        matches <- regmatches(hgvsp, regexec("\\d+", hgvsp))[[1]]
+        if (length(matches) > 0) as.integer(matches[1]) else NA
+    }
+    
     # Extract GnomAD variant dataframe
     get_gnomad_df <- function(data) {
         gene_symbol <- tryCatch(data$genes[[1]]$geneName$value, error = function(e) NULL)
@@ -177,15 +212,21 @@ server <- function(input, output, session) {
         vars <- tryCatch(gnomad_data$data$gene$variants, error = function(e) NULL)
         if (is.null(vars)) return(NULL)
         
+        selected_tx <- input$selected_transcript
+        
         df <- data.frame(
             Variant_ID  = vars$variant_id,
             Position    = vars$pos,
             Consequence = vars$consequence,
+            HGVSp = vars$hgvsp,
+            Transcript_ID = vars$transcript_id,
             AF = vars$exome$af,
             AC = vars$exome$ac,
             AN = vars$exome$an
         )
-        
+        df <- df[df$Transcript_ID == selected_tx, ]
+        df$AA_Position <- sapply(df$HGVSp, extract_aa_position)
+        df <- df[!is.na(df$AA_Position), ]
         df
     }
     
@@ -232,8 +273,10 @@ server <- function(input, output, session) {
             ),
             colnames = c(
                 "Variant ID" = "Variant_ID",
-                "Position" = "Position",
+                "Genomic Position" = "Position",
                 "Consequence" = "Consequence",
+                "Protein Change" = "HGVSp",
+                "Residue Position" = "AA_Position",
                 "Allele Freq" = "AF",
                 "Allele Count" = "AC",
                 "Allele Number" = "AN"
@@ -241,6 +284,45 @@ server <- function(input, output, session) {
             escape = FALSE
         )
     }, server = FALSE)
+    
+    # 1D plot Output
+    output$variant_1dplot <- renderPlot({
+        data <- protein_data()
+        req(data)
+        
+        ## get the domain info
+        domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
+        if (length(domains) == 0) return(NULL)
+        
+        domain_df <- data.frame(
+            start = as.integer(sapply(domains, function(x) x$location$start$value)),
+            end   = as.integer(sapply(domains, function(x) x$location$end$value)),
+            description = sapply(domains, function(x) x$description)
+        )
+        ## get missense variant info
+        gnomad_df <- get_gnomad_df(data)
+        missense_df <- subset(gnomad_df, grepl("missense_variant", Consequence, ignore.case = TRUE))
+        print(missense_df)
+        
+        ggplot() +
+            geom_rect(data = domain_df,
+                      aes(xmin = start, xmax = end, ymin = 0.4, ymax = 0.6),
+                      fill = "grey70") +
+            geom_linerange(data = missense_df,
+                           aes(x = AA_Position, ymin = 0.65, ymax = 0.95),
+                           color = "slateblue", size = 0.3) +
+            theme_minimal() +
+            theme(
+                axis.title.y = element_blank(),
+                axis.text.y = element_blank(),
+                axis.ticks.y = element_blank(),
+                legend.position = "right",
+                plot.title = element_text(size = 16, face = "bold")
+            ) +
+            labs(title = paste0(data$genes[[1]]$geneName$value), x = "Residue")
+    })
+    
+        
     
     # Alphafold API function
     fetch_alphafold_prediction <- function(uniprot_id) {
