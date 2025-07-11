@@ -6,6 +6,9 @@ library(r3dmol)
 library(shinycssloaders)
 library(bio3d)
 library(ggplot2)
+library(dplyr)
+library(biomaRt)
+library(plotly)
 
 # Define UI for application
 ui <- fluidPage(
@@ -54,11 +57,11 @@ ui <- fluidPage(
 )
 
 # Function to query GnomAD GraphQL API
-fetch_gnomad_by_gene <- function(gene_symbol) {
+fetch_gnomad_by_transcript <- function(transcript_id) {
     url <- "https://gnomad.broadinstitute.org/api"
     query <- '
-    query VariantsInGene($geneSymbol: String!) {
-        gene(gene_symbol: $geneSymbol, reference_genome: GRCh38) {
+    query TranscriptVariants($transcriptID: String!) {
+        transcript(transcript_id: $transcriptID, reference_genome: GRCh38) {
             variants(dataset: gnomad_r4) {
                     variant_id
                     pos
@@ -77,7 +80,7 @@ fetch_gnomad_by_gene <- function(gene_symbol) {
     body <- list(
         query = query,
         variables = list(
-            geneSymbol = gene_symbol
+            transcriptID = transcript_id
         )
     )
     
@@ -90,6 +93,22 @@ fetch_gnomad_by_gene <- function(gene_symbol) {
     }
 }
 
+# Get transcript ID by Uniprot ID
+get_transcripts_by_uniprot <- function(uniprot_id) {
+    ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+    
+    result <- getBM(
+        attributes = c("uniprotswissprot", "ensembl_transcript_id", "external_gene_name", "transcript_biotype"),
+        filters = "uniprotswissprot",
+        values = uniprot_id,
+        mart = ensembl
+    )
+    
+    # option: only keep transcript about protein coding
+    protein_tx <- subset(result, transcript_biotype == "protein_coding")
+    protein_tx <- unique(protein_tx)
+    return(protein_tx)
+}
 
 # Define server logic
 server <- function(input, output, session) {
@@ -109,7 +128,7 @@ server <- function(input, output, session) {
             h4("GnomAD Variant Table"),
             DT::dataTableOutput("gnomad_table"),
             h4("1D Plot"),
-            plotOutput("variant_1dplot"),
+            plotlyOutput("variant_1dplot", height="600px"),
             h4("AlphaFold 3D Structure"),
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
@@ -128,24 +147,55 @@ server <- function(input, output, session) {
         }
     })
     
-    # Get the transcripts ID from gnomAD
+    # Get the transcripts ID
     output$transcript_selector <- renderUI({
-        data <- protein_data()
-        req(data)
+        tx_df <- transcript_table()
+        if (nrow(tx_df) == 0) return(helpText("No transcript IDs found."))
         
-        gene_symbol <- tryCatch(data$genes[[1]]$geneName$value, error = function(e) NULL)
-        if (is.null(gene_symbol)) return(helpText("No gene symbol."))
+        choices <- setNames(tx_df$ensembl_transcript_id, 
+                            paste0(tx_df$ensembl_transcript_id, " (", tx_df$external_gene_name, ")"))
         
-        gnomad_data <- fetch_gnomad_by_gene(gene_symbol)
-        if (is.null(gnomad_data)) return(helpText("Failed to fetch gnomAD."))
+        selectInput("selected_transcript", "Select Transcript", choices = choices)
+    })
+    
+    # 响应式封装GnomAD data获取
+    gnomad_df <- reactive({
+        req(input$selected_transcript)
         
-        vars <- tryCatch(gnomad_data$data$gene$variants, error = function(e) NULL)
-        if (is.null(vars)) return(helpText("No variant data."))
+        gnomad_data <- fetch_gnomad_by_transcript(input$selected_transcript)
+        vars <- tryCatch(gnomad_data$data$transcript$variants, error = function(e) NULL)
+        if (is.null(vars)) return(NULL)
         
-        tx_ids <- unique(na.omit(vars$transcript_id))
-        if (length(tx_ids) == 0) return(helpText("No transcript IDs found."))
+        df <- data.frame(
+            Variant_ID = vars$variant_id,
+            Position = vars$pos,
+            Consequence = vars$consequence,
+            HGVSp = vars$hgvsp,
+            Transcript_ID = vars$transcript_id,
+            AF = vars$exome$af,
+            AC = vars$exome$ac,
+            AN = vars$exome$an
+        )
         
-        selectInput("selected_transcript", "Select Transcript", choices = tx_ids)
+        df$AA_Position <- sapply(df$HGVSp, function(hgvsp) {
+            if (is.na(hgvsp) || hgvsp == "") return(NA)
+            matches <- regmatches(hgvsp, regexec("\\d+", hgvsp))[[1]]
+            if (length(matches) > 0) as.integer(matches[1]) else NA
+        })
+        
+        df
+    })
+    
+    transcript_table <- reactive({
+        req(input$pid)
+        get_transcripts_by_uniprot(input$pid)
+    })
+    
+    gene_name <- reactive({
+        tx_df <- transcript_table()
+        tx <- input$selected_transcript
+        matched_gene <- tx_df$external_gene_name[tx_df$ensembl_transcript_id == tx]
+        if (length(matched_gene) > 0 && nzchar(matched_gene)) matched_gene else "Unknown Gene"
     })
     
     # Basic info output
@@ -155,7 +205,7 @@ server <- function(input, output, session) {
             list(
                 ID = data$primaryAccession,
                 Protein_Name = data$proteinDescription$recommendedName$fullName$value,
-                Gene = data$genes[[1]]$geneName$value,
+                Gene = paste(sapply(data$genes, function(g) g$geneName$value), collapse = "; "),
                 Organism = data$organism$scientificName,
                 Length = data$sequence$length
             )
@@ -193,47 +243,11 @@ server <- function(input, output, session) {
             data.frame(Message = "No feature data available.")
         }
     })
-    
-    # function to extract amino acid position
-    extract_aa_position <- function(hgvsp) {
-        if (is.na(hgvsp) || hgvsp == "") return(NA)
-        matches <- regmatches(hgvsp, regexec("\\d+", hgvsp))[[1]]
-        if (length(matches) > 0) as.integer(matches[1]) else NA
-    }
-    
-    # Extract GnomAD variant dataframe
-    get_gnomad_df <- function(data) {
-        gene_symbol <- tryCatch(data$genes[[1]]$geneName$value, error = function(e) NULL)
-        if (is.null(gene_symbol)) return(NULL)
-        
-        gnomad_data <- fetch_gnomad_by_gene(gene_symbol)
-        if (is.null(gnomad_data)) return(NULL)
-        
-        vars <- tryCatch(gnomad_data$data$gene$variants, error = function(e) NULL)
-        if (is.null(vars)) return(NULL)
-        
-        selected_tx <- input$selected_transcript
-        
-        df <- data.frame(
-            Variant_ID  = vars$variant_id,
-            Position    = vars$pos,
-            Consequence = vars$consequence,
-            HGVSp = vars$hgvsp,
-            Transcript_ID = vars$transcript_id,
-            AF = vars$exome$af,
-            AC = vars$exome$ac,
-            AN = vars$exome$an
-        )
-        df <- df[df$Transcript_ID == selected_tx, ]
-        df$AA_Position <- sapply(df$HGVSp, extract_aa_position)
-        df <- df[!is.na(df$AA_Position), ]
-        df
-    }
+
     
     # GnomAD Summary info Output
     output$gnomad_summary <- renderUI({
-        data <- protein_data()
-        df <- get_gnomad_df(data)
+        df <- gnomad_df()
         
         if (is.null(df) || nrow(df) == 0) return("No variants found")
         
@@ -254,8 +268,7 @@ server <- function(input, output, session) {
     
     # Gnomad data table display by DT
     output$gnomad_table <- DT::renderDT({
-        data <- protein_data()
-        df <- get_gnomad_df(data)
+        df <- gnomad_df()
         
         if (is.null(df) || nrow(df) == 0) return(NULL)
         
@@ -267,9 +280,10 @@ server <- function(input, output, session) {
             options = list(
                 pageLength = 10,
                 lengthMenu = c(10, 25, 50),
-                autoWidth = TRUE,
                 dom = 'lBfrtip',
-                buttons = c('excel', 'pdf', 'csv')
+                buttons = c('excel', 'pdf', 'csv'),
+                scrollX = TRUE, 
+                columnDefs = list(list(width = '120px', targets = "_all"))
             ),
             colnames = c(
                 "Variant ID" = "Variant_ID",
@@ -286,10 +300,13 @@ server <- function(input, output, session) {
     }, server = FALSE)
     
     # 1D plot Output
-    output$variant_1dplot <- renderPlot({
+    output$variant_1dplot <- renderPlotly({
         data <- protein_data()
         req(data)
         
+        protein_len_df <- data.frame(start = 0, end = data$sequence$length,
+                                     ymin = 0.4, ymax = 0.6,
+                                     label = paste0("Protein length: ", data$sequence$length))
         ## get the domain info
         domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
         if (length(domains) == 0) return(NULL)
@@ -300,26 +317,73 @@ server <- function(input, output, session) {
             description = sapply(domains, function(x) x$description)
         )
         ## get missense variant info
-        gnomad_df <- get_gnomad_df(data)
-        missense_df <- subset(gnomad_df, grepl("missense_variant", Consequence, ignore.case = TRUE))
-        print(missense_df)
+        df <- gnomad_df()
+        missense_df <- subset(df, grepl("missense_variant", Consequence, ignore.case = TRUE))
+        # print(missense_df)
+        missense_df <- missense_df[!is.na(missense_df$AA_Position), ]
         
-        ggplot() +
+        p1 <- ggplot() +
+            geom_rect(data = protein_len_df, 
+                      aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax, text = label), 
+                      fill = "grey90") +
             geom_rect(data = domain_df,
-                      aes(xmin = start, xmax = end, ymin = 0.4, ymax = 0.6),
-                      fill = "grey70") +
+                      aes(xmin = start, xmax = end, ymin = 0.4, ymax = 0.6,
+                          text = paste0("Domain: ", description, "\n", start, " - ", end)),
+                      fill = "#fca6a6") +
             geom_linerange(data = missense_df,
                            aes(x = AA_Position, ymin = 0.65, ymax = 0.95),
-                           color = "slateblue", size = 0.3) +
+                           color = "slateblue", size = 0.3, alpha = 0.5) +
             theme_minimal() +
             theme(
                 axis.title.y = element_blank(),
                 axis.text.y = element_blank(),
                 axis.ticks.y = element_blank(),
-                legend.position = "right",
-                plot.title = element_text(size = 16, face = "bold")
+                legend.position = "none"
             ) +
-            labs(title = paste0(data$genes[[1]]$geneName$value), x = "Residue")
+            labs(x = NULL)
+        
+        #bin_width <- 3
+        #missense_df$bin <- cut(missense_df$AA_Position,
+         #                      breaks = seq(0, max(missense_df$AA_Position, na.rm = TRUE) + bin_width, by = bin_width),
+          #                     right = FALSE)
+        #bin_counts <- missense_df |>
+         #   group_by(bin) |>
+          #  summarise(
+           #     start = as.numeric(gsub("\\[|,.*", "", bin)),  # 提取起点
+            #    Vd = n()
+            #)
+        #bin_counts$Vp <- bin_width
+        #bin_counts$y <- bin_counts$Vd / bin_counts$Vp
+        #vd_df <- bin_counts
+        mut_index <- missense_df$AA_Position |> unique()
+        prot_len <- data$sequence$length
+        window <- 3
+        vp <- length(mut_index) / prot_len
+        
+        index <- 1:prot_len
+        vdvp_vals <- sapply(index, function(x) {
+            vd <- sum(mut_index %in% x:(x + window))
+            vd / window / vp
+        })
+        
+        vdvp_df <- data.frame(x = index + window / 2, y = vdvp_vals)
+        vdvp_df <- as.data.frame(spline(vdvp_df$x, vdvp_df$y))
+        
+        p2 <- ggplot(vdvp_df, aes(x = x, y = y)) +
+            geom_line(color = "steelblue", size = 0.6) +
+            theme_minimal() +
+            labs(x = "Residue", y = "Vd/Vp") +
+            theme(
+                plot.title = element_blank()
+            )
+        
+        p1_plotly <- ggplotly(p1, tooltip = "text") %>% layout(margin = list(b = 0))
+        p2_plotly <- ggplotly(p2) %>% layout(margin = list(t = 0))
+        
+        protein_name <- data$proteinDescription$recommendedName$fullName$value
+        subplot(p1_plotly, p2_plotly, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+            layout(title = list(text = paste0("Protein: ", protein_name, "; Gene: ", gene_name()), x = 0, xanchor = "left"),
+                   margin = list(t = 60))
     })
     
         
