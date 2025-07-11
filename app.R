@@ -9,6 +9,7 @@ library(ggplot2)
 library(dplyr)
 library(biomaRt)
 library(plotly)
+library(patchwork)
 
 # Define UI for application
 ui <- fluidPage(
@@ -132,7 +133,10 @@ server <- function(input, output, session) {
             h4("AlphaFold 3D Structure"),
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
-            downloadButton("download_pdb", "Download PDB File")
+            downloadButton("download_pdb", "Download PDB File"),
+            h4("FELLS Analysis"),
+            uiOutput("fellsUI"),
+            plotOutput("fells_plot", height = "500px")
         )
     })
     
@@ -472,6 +476,127 @@ server <- function(input, output, session) {
         } else {
             m_remove_all_surfaces(id = "structure_view")
         }
+    })
+    
+    fells_job <- reactiveVal()
+    fells_result <- reactiveVal()
+    fells_class <- reactiveVal("btn-primary")
+    
+    output$fellsUI <- renderUI({
+        actionButton("fells", label = "Submit to FELLS", class = fells_class())
+    })
+    
+    observeEvent(input$fells, {
+        data <- protein_data()
+        req(data)
+        
+        seq <- data$sequence$value
+        pseq <- paste0(">", input$pid, "\n", seq)
+        
+        req <- request("http://protein.bio.unipd.it/fellsws/submit") |> 
+            req_headers("Content-Type" = "multipart/form-data") |>
+            req_body_multipart(sequence = pseq)
+        
+        resp <- req_perform(req)
+        rb <- resp |> resp_body_json()
+        fells_job(rb$jobid)
+        
+        showModal(modalDialog(title = "FELLS job submitted"))
+        fells_class("btn-warning")
+        updateActionButton(inputId = "fells", label = "FELLS submitted")
+        
+        job <- fells_job()
+        status <- "submitted"
+        
+        while (status != "done") {
+            Sys.sleep(10)
+            check <- request(paste0("http://protein.bio.unipd.it/fellsws/status/", job))
+            resp <- req_perform(check)
+            rb <- resp |> resp_body_json()
+            status <- rb$status
+        }
+        
+        if (status == "done") {
+            result_id <- rb$names[[1]][[2]]
+            req2 <- request(paste0("http://protein.bio.unipd.it/fellsws/result/", result_id))
+            res2 <- req_perform(req2)
+            rb2 <- res2 |> resp_body_json()
+            fells_result(rb2)
+            
+            fells_class("btn-success")
+            updateActionButton(inputId = "fells", label = "FELLS complete")
+            
+            showModal(modalDialog(title = "FELLS job complete"))
+        } else {
+            fells_class("btn-danger")
+            updateActionButton(inputId = "fells", label = "FELLS failed")
+            showModal(modalDialog(title = "FELLS job failed"))
+        }
+    })
+    
+    fells_hsc <- reactive({
+        fr <- fells_result()
+        req(fr)
+        
+        phelix <- fr$p_h |> unlist()
+        pstrand <- fr$p_e |> unlist()
+        pcoil <- fr$p_c |> unlist()
+        
+        df <- data.frame(
+            index = seq_along(phelix),
+            Helix = as.numeric(phelix),
+            Strand = as.numeric(pstrand),
+            Coil = as.numeric(pcoil)
+        ) |> 
+            mutate(Coil = Coil * -1) |>
+            tidyr::pivot_longer(-index) |>
+            mutate(alpha = ifelse(name == "Coil", -value, value),
+                   alphag = cut(alpha, breaks = 5))
+        
+        df
+    })
+    
+    fells_hd <- reactive({
+        fr <- fells_result()
+        req(fr)
+        
+        hca <- fr$hca |> unlist()
+        dis <- fr$p_dis |> unlist()
+        
+        df <- data.frame(
+            index = seq_along(hca),
+            HCA = as.numeric(hca),
+            Disorder = as.numeric(dis)
+        ) |> 
+            mutate(Disorder = Disorder * -1) |>
+            tidyr::pivot_longer(-index) |>
+            mutate(alpha = ifelse(name == "Disorder", -value, value),
+                   alphag = cut(alpha, breaks = 5))
+        
+        df
+    })
+    
+    output$fells_plot <- renderPlot({
+        req(fells_class() == "btn-success")
+        
+        hsc_cols <- c(Helix = "#91288c", Strand = "#ffa500", Coil = "gray50")
+        dh_cols <- c(Disorder = "red", HCA = "black")
+        
+        p1 <- ggplot(fells_hsc(), aes(index, value, fill = name, alpha = alpha)) +
+            geom_col(position = "identity") +
+            scale_fill_manual(values = hsc_cols) +
+            guides(alpha = "none") +
+            theme_minimal() +
+            ggtitle("Secondary Structure Prediction")
+        
+        p2 <- ggplot(fells_hd(), aes(index, value, fill = name, alpha = alpha)) +
+            geom_col(position = "identity") +
+            scale_fill_manual(values = dh_cols) +
+            guides(alpha = "none") +
+            theme_minimal() +
+            ggtitle("Disorder & HCA")
+        
+        patchwork::wrap_plots(p1, p2, ncol = 1)
     })
 }
 
