@@ -10,6 +10,7 @@ library(dplyr)
 library(biomaRt)
 library(plotly)
 library(patchwork)
+library(shinyBS)
 
 # Define UI for application
 ui <- fluidPage(
@@ -129,6 +130,11 @@ server <- function(input, output, session) {
             h4("GnomAD Variant Table"),
             DT::dataTableOutput("gnomad_table"),
             h4("1D Plot"),
+            numericInput("vdvp_window", "Window size:", value = 3, min = 0.01, step = 0.1),
+            bsTooltip("vdvp_window", 
+                      title = "Window size: Integer = fixed length, < 1 = fraction of the protein length", 
+                      placement = "right", 
+                      trigger = "hover"),
             plotlyOutput("variant_1dplot", height="600px"),
             h4("AlphaFold 3D Structure"),
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
@@ -346,22 +352,16 @@ server <- function(input, output, session) {
             ) +
             labs(x = NULL)
         
-        #bin_width <- 3
-        #missense_df$bin <- cut(missense_df$AA_Position,
-         #                      breaks = seq(0, max(missense_df$AA_Position, na.rm = TRUE) + bin_width, by = bin_width),
-          #                     right = FALSE)
-        #bin_counts <- missense_df |>
-         #   group_by(bin) |>
-          #  summarise(
-           #     start = as.numeric(gsub("\\[|,.*", "", bin)),  # 提取起点
-            #    Vd = n()
-            #)
-        #bin_counts$Vp <- bin_width
-        #bin_counts$y <- bin_counts$Vd / bin_counts$Vp
-        #vd_df <- bin_counts
         mut_index <- missense_df$AA_Position |> unique()
         prot_len <- data$sequence$length
-        window <- 3
+        # window <- 3
+        user_input <- input$vdvp_window
+        if (user_input < 1) {
+            window <- max(1, floor(prot_len * user_input))  # fraction
+        } else {
+            window <- as.integer(user_input)  # fixed
+        }
+        
         vp <- length(mut_index) / prot_len
         
         index <- 1:prot_len
