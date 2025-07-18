@@ -26,34 +26,23 @@ ui <- fluidPage(
             hr(),
             
             uiOutput("transcript_selector"),
+            uiOutput("pdb_selector"),
             
-            # Select the style of 3D structure
-            selectInput("set_style", "Choose Structure Style",
-                        choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
-                        selected = "Cartoon"),
-            
-            # 3D structure spin
-            checkboxInput("spin", "Spin Structure", value = FALSE),
-            checkboxInput("surface", "Show Surface", value = FALSE),
-            # show labels
-            # checkboxInput("labels", "Show Labels on Selected", value = FALSE),
-            # highlight selected residues
-            # actionButton("selectSpheres", "Highlight Selected Residues")
+            selectInput("structure_source", "Choose Structure Source",
+                        choices = c("AlphaFold", "PDB"),
+                        selected = "AlphaFold"),
+            uiOutput("structure_controls"), 
+            hr(),
+            uiOutput("fells_button")
         ),
 
         # Show a plot of the generated distribution
         mainPanel(
-           #h4("Protein Info"),
-           #verbatimTextOutput("info"),
-           #h4("Sequence"),
-           #verbatimTextOutput("sequence"),
-           #h4("Domains"),
-           #tableOutput("domain_table"), 
-           #h4("GnomAD Summary"),
-           #uiOutput("gnomad_summary"),
-           #h4("AlphaFold 3D Structure"),
-           #downloadButton("download_pdb", "Download PDB File")
-            uiOutput("main_content")
+            tabsetPanel(id = "main_tabs",
+                tabPanel("Basic Info", uiOutput("tab_basic")),
+                tabPanel("1D Plot", uiOutput("tab_1dplot")),
+                tabPanel("3D Structure", uiOutput("tab_3d"))
+            )
         )
     )
 )
@@ -114,10 +103,9 @@ get_transcripts_by_uniprot <- function(uniprot_id) {
 
 # Define server logic
 server <- function(input, output, session) {
-    output$main_content <- renderUI({
-        data <- protein_data()
-        req(data)
-        
+    # Basic Info Tab
+    output$tab_basic <- renderUI({
+        req(protein_data())
         tagList(
             h4("Protein Info"),
             verbatimTextOutput("info"),
@@ -128,21 +116,50 @@ server <- function(input, output, session) {
             h4("GnomAD Summary"),
             uiOutput("gnomad_summary"),
             h4("GnomAD Variant Table"),
-            DT::dataTableOutput("gnomad_table"),
-            h4("1D Plot"),
+            DT::dataTableOutput("gnomad_table")
+        )
+    })
+    
+    # 1D Plot Tab
+    output$tab_1dplot <- renderUI({
+        req(protein_data())
+        tagList(
             numericInput("vdvp_window", "Window size:", value = 3, min = 0.01, step = 0.1),
             bsTooltip("vdvp_window", 
                       title = "Window size: Integer = fixed length, < 1 = fraction of the protein length", 
                       placement = "right", 
                       trigger = "hover"),
             plotlyOutput("variant_1dplot", height="600px"),
-            h4("AlphaFold 3D Structure"),
+            br(),
+            conditionalPanel(
+                condition = "output.fellsAvailable == true",
+                h4("FELLS Result"),
+                plotOutput("fells_plot", height = "500px")
+            )
+        )
+    })
+    
+    # 3D Structure Tab
+    output$tab_3d <- renderUI({
+        req(protein_data())
+        tagList(
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
-            downloadButton("download_pdb", "Download PDB File"),
-            h4("FELLS Analysis"),
-            uiOutput("fellsUI"),
-            plotOutput("fells_plot", height = "500px")
+            textOutput("structure_info"),
+            downloadButton("download_pdb", "Download PDB File")
+        )
+    })
+    
+    
+    output$structure_controls <- renderUI({
+        req(structure_source_real())
+        
+        tagList(
+            selectInput("set_style", "Choose Structure Style",
+                        choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
+                        selected = "Cartoon"),
+            checkboxInput("spin", "Spin Structure", value = FALSE),
+            checkboxInput("surface", "Show Surface", value = FALSE)
         )
     })
     
@@ -406,60 +423,146 @@ server <- function(input, output, session) {
         }
     }
     
+    # Function to get PDB id from Uniprot id
+    get_pdb_ids_from_uniprot <- function(uniprot_id) {
+        url <- paste0("https://www.ebi.ac.uk/proteins/api/proteins/", uniprot_id)
+        res <- httr::GET(url, httr::add_headers(Accept = "application/json"))
+        if (httr::status_code(res) == 200) {
+            data <- httr::content(res, as = "parsed", type = "application/json")
+            pdbs <- data$dbReferences[sapply(data$dbReferences, function(x) x$type == "PDB")]
+            if (length(pdbs) > 0) {
+                return(sapply(pdbs, function(x) x$id))
+            }
+        }
+        return(character(0))
+    }
+    # Get the first PDB id
+    get_first_pdb_id <- function(uniprot_id) {
+        pdb_ids <- get_pdb_ids_from_uniprot(uniprot_id)
+        if (length(pdb_ids) > 0) return(pdb_ids[1])
+        return(NULL)
+    }
+    
+    # Get all the PDB id in the list
+    pdb_id_list <- reactive({
+        req(input$pid)
+        get_pdb_ids_from_uniprot(input$pid)
+    })
+    
+    output$pdb_selector <- renderUI({
+        req(input$structure_source == "PDB")
+        ids <- pdb_id_list()
+        if (length(ids) > 0) {
+            selectInput("selected_pdb_id", "Select PDB Structure", choices = ids, selected = ids[1])
+        } else {
+            helpText("No PDB structures available.")
+        }
+    })
+    
+    structure_source_real <- reactiveVal(NULL)
+    
     # 3D structure with r3dmol
     output$structure_view <- renderR3dmol({
-        req(input$pid)
+        req(input$pid, input$structure_source)
         
         shiny::validate(
             need(nzchar(input$pid), "Please enter a UniProt ID.")
         )
+        uniprot_id <- input$pid
+        pdb_data <- NULL
         
-        pdb_url <- m_bio3d(bio3d::read.pdb(paste0("https://alphafold.ebi.ac.uk/files/AF-",input$pid,"-F1-model_v4.pdb")))
-        
+        if (input$structure_source == "AlphaFold") {
+            structure_source_real("AlphaFold")
+            pdb_data <- m_bio3d(bio3d::read.pdb(paste0("https://alphafold.ebi.ac.uk/files/AF-",input$pid,"-F1-model_v4.pdb")))
+        } else if (input$structure_source == "PDB") {
+            req(input$selected_pdb_id)
+            pdb_id <- input$selected_pdb_id
+            
+            tryCatch({
+                pdb_data <- m_bio3d(bio3d::read.pdb(paste0("https://files.rcsb.org/download/", pdb_id, ".pdb")))
+                structure_source_real("PDB")
+            }, error = function(e){
+                showNotification("No PDB structure available for this protein, fallback to AlphaFold.", type = "error")
+                pdb_data <- m_bio3d(bio3d::read.pdb(paste0("https://alphafold.ebi.ac.uk/files/AF-",input$pid,"-F1-model_v4.pdb")))
+                structure_source_real("AlphaFold")
+            })
+        }
+
         r3dmol(
             viewer_spec = m_viewer_spec(backgroundColor = "white", 
                                         cartoonQuality = 25,
                                         lowerZoomLimit = 5,
                                         upperZoomLimit = 1000)
         ) %>%
-            m_add_model(data = pdb_url, format = "pdb") %>%
+            m_add_model(data = pdb_data, format = "pdb") %>%
             m_set_style(style = m_style_cartoon(color = "spectrum")) %>%
             m_zoom_to()
     })
     
-    
+    # Text about 3D source
+    output$structure_info <- renderText({
+        req(input$pid)
+        src <- structure_source_real()
+        
+        if (src == "AlphaFold") {
+            paste("Structure from AlphaFold for Uniprot ID:", input$pid)
+        } else if(src == "PDB"){
+            paste("Structure from PDB:", input$selected_pdb_id)
+        } else {
+                "No PDB structure found for this UniProt ID."
+            }
+    })
     
     # Download PDB button
     output$download_pdb <- downloadHandler(
         filename = function() {
+            src <- structure_source_real()
             uniprot_id <- input$pid
-            af_data <- fetch_alphafold_prediction(uniprot_id)
             
-            if (!is.null(af_data) && !is.null(af_data[[1]]$entryId)) {
-                paste0(af_data[[1]]$entryId, ".pdb")
-            } else {
-                paste0("AF-", uniprot_id, "-model.pdb")
+            if(src == "AlphaFold"){
+                af_data <- fetch_alphafold_prediction(uniprot_id)
+                if (!is.null(af_data) && !is.null(af_data[[1]]$entryId)) {
+                    paste0(af_data[[1]]$entryId, ".pdb")
+                } else {
+                    paste0("AF-", uniprot_id, "-model.pdb")
+                }
+            } else if(src == "PDB"){
+                pdb_id <- input$selected_pdb_id
+                if (!is.null(pdb_id)) {
+                    return(paste0(pdb_id, ".pdb"))
+                } else {
+                    return("pdb_structure.pdb")
+                }
             }
         },
         
         content = function(file) {
+            src <- structure_source_real()
             uniprot_id <- input$pid
-            af_data <- fetch_alphafold_prediction(uniprot_id)
-            
-            if (is.null(af_data) || length(af_data) == 0 || is.null(af_data[[1]]$pdbUrl)) {
-                warning("AlphaFold model not available for this protein.")
-                return(NULL)
+            if (src == "AlphaFold") {
+                af_data <- fetch_alphafold_prediction(uniprot_id)
+                if (!is.null(af_data) && !is.null(af_data[[1]]$pdbUrl)) {
+                    pdb_url <- af_data[[1]]$pdbUrl
+                    download.file(pdb_url, destfile = file, mode = "wb")
+                } else {
+                    showNotification("AlphaFold model not available for this protein.", type = "error")
+                }
+            } else if(src == "PDB"){
+                pdb_id <- input$selected_pdb_id
+                if (!is.null(pdb_id)) {
+                    pdb_url <- paste0("https://files.rcsb.org/download/", pdb_id, ".pdb")
+                    download.file(pdb_url, destfile = file, mode = "wb")
+                } else {
+                    showNotification("No PDB ID selected for download.", type = "error")
+                }
             }
-            
-            pdb_url <- af_data[[1]]$pdbUrl
-            download.file(pdb_url, destfile = file, mode = "wb")
         }
     )
     
     observeEvent(input$set_style, {
         style <- switch(input$set_style,
                         "Line" = list(line = list()),
-                        "Cartoon" = list(cartoon = list()),
+                        "Cartoon" = list(cartoon = list(color = "spectrum")),
                         "Stick" = list(stick = list()),
                         "Cross" = list(cross = list()),
                         "Sphere" = list(sphere = list()))
@@ -482,9 +585,15 @@ server <- function(input, output, session) {
     fells_result <- reactiveVal()
     fells_class <- reactiveVal("btn-primary")
     
-    output$fellsUI <- renderUI({
+    output$fells_button <- renderUI({
+        req(protein_data())
         actionButton("fells", label = "Submit to FELLS", class = fells_class())
     })
+    
+    output$fellsAvailable <- reactive({
+        fells_class() == "btn-success"
+    })
+    outputOptions(output, "fellsAvailable", suspendWhenHidden = FALSE)
     
     observeEvent(input$fells, {
         data <- protein_data()
