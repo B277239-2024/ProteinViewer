@@ -11,26 +11,52 @@ library(biomaRt)
 library(plotly)
 library(patchwork)
 library(shinyBS)
+library(shinyjs)
 
 # Define UI for application
 ui <- fluidPage(
-
-    # Application title
+    useShinyjs(),
     titlePanel("Protein info Viewer"),
 
     # Sidebar with a slider input for number of bins 
     sidebarLayout(
         sidebarPanel(
+            radioButtons("seq_source", "Sequence Source",
+                         choices = c("API" = "api", "Upload File" = "upload"),
+                         selected = "api",
+                         inline = TRUE),
+            
+            conditionalPanel(
+                condition = "input.seq_source == 'upload'",
+                fileInput("fasta_upload", "Upload FASTA File", 
+                          accept = c(".fasta", ".fa"),
+                          placeholder = "Upload a FASTA file")
+            ),
+            conditionalPanel(
+                condition = "input.seq_source == 'upload'",
+                fileInput("gnomad_upload", "Upload gnomAD-like CSV",
+                          accept = c(".csv"),
+                          placeholder = "Optional variant CSV with HGVSp column"),
+                helpText("Optional. Must contain HGVSp column like 'p.Arg12Cys'.")
+            ),
+            
             textInput("pid", "Enter UniProt ID"),
             actionButton("fetch", "Fetch info"), 
             hr(),
             
-            uiOutput("transcript_selector"),
+            conditionalPanel(
+                condition = "input.seq_source == 'api'",
+                uiOutput("transcript_selector")
+            ),
             uiOutput("pdb_selector"),
             
             selectInput("structure_source", "Choose Structure Source",
-                        choices = c("AlphaFold", "PDB"),
+                        choices = c("AlphaFold", "PDB", "Upload"),
                         selected = "AlphaFold"),
+            conditionalPanel(
+                condition = "input.structure_source == 'Upload'",
+                fileInput("pdb_upload", "Upload PDB File", accept = c(".pdb"))
+            ),
             uiOutput("structure_controls"), 
             hr(),
             uiOutput("fells_button")
@@ -105,24 +131,37 @@ get_transcripts_by_uniprot <- function(uniprot_id) {
 server <- function(input, output, session) {
     # Basic Info Tab
     output$tab_basic <- renderUI({
-        req(protein_data())
+        has_seq <- !is.null(current_sequence())
+        has_gnomad <- !is.null(gnomad_df()) && nrow(gnomad_df()) > 0
+        
+        if (!has_seq && !has_gnomad) return(helpText("Please upload a FASTA file or a gnomAD CSV."))
+        
         tagList(
-            h4("Protein Info"),
-            verbatimTextOutput("info"),
-            h4("Sequence"),
-            verbatimTextOutput("sequence"),
-            h4("Domains"),
-            tableOutput("domain_table"),
-            h4("GnomAD Summary"),
-            uiOutput("gnomad_summary"),
-            h4("GnomAD Variant Table"),
-            DT::dataTableOutput("gnomad_table")
+            if(has_seq){
+                tagList(
+                    h4("Protein Info"),
+                    verbatimTextOutput("info"),
+                    h4("Sequence"),
+                    verbatimTextOutput("sequence"),
+                    h4("Domains"),
+                    tableOutput("domain_table")
+                )
+            },
+            
+            if (has_gnomad) {
+                tagList(
+                    h4("GnomAD Summary"),
+                    uiOutput("gnomad_summary"),
+                    h4("GnomAD Variant Table"),
+                    DT::dataTableOutput("gnomad_table")
+                )
+            }
         )
     })
     
     # 1D Plot Tab
     output$tab_1dplot <- renderUI({
-        req(protein_data())
+        req(current_sequence())
         tagList(
             numericInput("vdvp_window", "Window size:", value = 3, min = 0.01, step = 0.1),
             bsTooltip("vdvp_window", 
@@ -141,7 +180,7 @@ server <- function(input, output, session) {
     
     # 3D Structure Tab
     output$tab_3d <- renderUI({
-        req(protein_data())
+        req(input$structure_source)
         tagList(
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
@@ -152,7 +191,7 @@ server <- function(input, output, session) {
     
     
     output$structure_controls <- renderUI({
-        req(structure_source_real())
+        req(input$structure_source)
         
         tagList(
             selectInput("set_style", "Choose Structure Style",
@@ -161,6 +200,14 @@ server <- function(input, output, session) {
             checkboxInput("spin", "Spin Structure", value = FALSE),
             checkboxInput("surface", "Show Surface", value = FALSE)
         )
+    })
+
+    observe({
+        if (input$seq_source == "upload") {
+            shinyjs::disable("fetch")
+        } else {
+            shinyjs::enable("fetch")
+        }
     })
     
     # Get Uniprot Json Data
@@ -171,6 +218,32 @@ server <- function(input, output, session) {
             content(res, as = "parsed", type = "application/json")
         } else {
             NULL
+        }
+    })
+    
+    # Read FASTA File
+    uploaded_fasta_seq <- reactive({
+        req(input$fasta_upload)
+        tryCatch({
+            fasta_lines <- readLines(input$fasta_upload$datapath)
+            seq_lines <- fasta_lines[!grepl("^>", fasta_lines)]
+            paste(seq_lines, collapse = "")
+        }, error = function(e) {
+            showNotification("Failed to read FASTA file. Please check the format.", type = "error")
+            return(NULL)
+        })
+    })
+    
+    current_sequence <- reactive({
+        if (input$seq_source == "upload") {
+            if (!is.null(input$fasta_upload)) {
+                return(uploaded_fasta_seq())
+            } else {
+                return(NULL)
+            }
+        } else {
+            data <- protein_data()
+            if (!is.null(data)) data$sequence$value else NULL
         }
     })
     
@@ -185,32 +258,84 @@ server <- function(input, output, session) {
         selectInput("selected_transcript", "Select Transcript", choices = choices)
     })
     
-    # 响应式封装GnomAD data获取
-    gnomad_df <- reactive({
-        req(input$selected_transcript)
+    # Get Gnomad Data
+    uploaded_gnomad_df <- reactive({
+        req(input$gnomad_upload)
         
-        gnomad_data <- fetch_gnomad_by_transcript(input$selected_transcript)
-        vars <- tryCatch(gnomad_data$data$transcript$variants, error = function(e) NULL)
-        if (is.null(vars)) return(NULL)
-        
-        df <- data.frame(
-            Variant_ID = vars$variant_id,
-            Position = vars$pos,
-            Consequence = vars$consequence,
-            HGVSp = vars$hgvsp,
-            Transcript_ID = vars$transcript_id,
-            AF = vars$exome$af,
-            AC = vars$exome$ac,
-            AN = vars$exome$an
-        )
-        
-        df$AA_Position <- sapply(df$HGVSp, function(hgvsp) {
-            if (is.na(hgvsp) || hgvsp == "") return(NA)
-            matches <- regmatches(hgvsp, regexec("\\d+", hgvsp))[[1]]
-            if (length(matches) > 0) as.integer(matches[1]) else NA
+        tryCatch({
+            df_raw <- read.csv(input$gnomad_upload$datapath, stringsAsFactors = FALSE, check.names = FALSE)
+            
+            col_map <- list(
+                Variant_ID = "gnomAD ID", 
+                Position = "Position",
+                Consequence = "VEP Annotation",
+                HGVSp = "HGVS Consequence",
+                AF = "Allele Frequency",
+                AC = "Allele Count",
+                AN = "Allele Number"
+            )
+            
+            df_cols <- lapply(names(col_map), function(newname) {
+                oldname <- col_map[[newname]]
+                if (oldname %in% colnames(df_raw)) {
+                    return(df_raw[[oldname]])
+                } else {
+                    return(rep(NA, nrow(df_raw)))
+                }
+            })
+            names(df_cols) <- names(col_map)
+            df <- as.data.frame(df_cols, stringsAsFactors = FALSE)
+            
+            # print(colnames(df_raw))
+            # print(colnames(df))
+            
+            # Extract amino acid position
+            df$AA_Position <- sapply(df$HGVSp, function(hgvsp) {
+                if (!is.na(hgvsp) && grepl("^p\\.", hgvsp)) {
+                    matches <- regmatches(hgvsp, regexec("\\d+", hgvsp))[[1]]
+                    if (length(matches) > 0) as.integer(matches[1]) else NA
+                } else {
+                    NA
+                }
+            })
+            
+            df
+            # print(head(df))
+        }, error = function(e) {
+            showNotification("Failed to read gnomAD CSV file.", type = "error")
+            return(NULL)
         })
+    })
+    
+    gnomad_df <- reactive({
+        if (input$seq_source == "upload") {
+            uploaded_gnomad_df()
+        } else {
+            req(input$selected_transcript)
         
-        df
+            gnomad_data <- fetch_gnomad_by_transcript(input$selected_transcript)
+            vars <- tryCatch(gnomad_data$data$transcript$variants, error = function(e) NULL)
+            if (is.null(vars)) return(NULL)
+        
+            df <- data.frame(
+                Variant_ID = vars$variant_id,
+                Position = vars$pos,
+                Consequence = vars$consequence,
+                HGVSp = vars$hgvsp,
+                Transcript_ID = vars$transcript_id,
+                AF = vars$exome$af,
+                AC = vars$exome$ac,
+                AN = vars$exome$an
+            )
+        
+            df$AA_Position <- sapply(df$HGVSp, function(hgvsp) {
+                if (is.na(hgvsp) || hgvsp == "") return(NA)
+                matches <- regmatches(hgvsp, regexec("\\d+", hgvsp))[[1]]
+                if (length(matches) > 0) as.integer(matches[1]) else NA
+            })
+        
+            df
+        }
     })
     
     transcript_table <- reactive({
@@ -227,22 +352,45 @@ server <- function(input, output, session) {
     
     # Basic info output
     output$info <- renderPrint({
-        data <- protein_data()
-        if (!is.null(data)){
-            list(
-                ID = data$primaryAccession,
-                Protein_Name = data$proteinDescription$recommendedName$fullName$value,
-                Gene = paste(sapply(data$genes, function(g) g$geneName$value), collapse = "; "),
-                Organism = data$organism$scientificName,
-                Length = data$sequence$length
-            )
+        if (input$seq_source == "upload") {
+            seq <- uploaded_fasta_seq()
+            if (!is.null(seq)) {
+                list(
+                    Protein_Name = "User uploaded sequence",
+                    Length = nchar(seq),
+                    Gene = "N/A",
+                    Organism = "N/A"
+                )
+            } else {
+                "No sequence available."
+            }
         } else {
-            "Failed to fetch, please check the UniProt ID"
+            data <- protein_data()
+            if (!is.null(data)){
+                list(
+                    ID = data$primaryAccession,
+                    Protein_Name = data$proteinDescription$recommendedName$fullName$value,
+                    Gene = paste(sapply(data$genes, function(g) g$geneName$value), collapse = "; "),
+                    Organism = data$organism$scientificName,
+                    Length = data$sequence$length
+                )
+            } else {
+                "Failed to fetch, please check the UniProt ID"
+            }
         }
     })
     
     # Protein sequence output
     output$sequence <- renderText({
+        if (input$seq_source == "upload") {
+            seq <- uploaded_fasta_seq()
+            if (!is.null(seq)) {
+                return(seq)
+            } else {
+                return("Failed to load uploaded sequence.")
+            }
+        }
+        
         data <- protein_data()
         if (!is.null(data)){
             data$sequence$value
@@ -328,21 +476,25 @@ server <- function(input, output, session) {
     
     # 1D plot Output
     output$variant_1dplot <- renderPlotly({
-        data <- protein_data()
-        req(data)
+        req(current_sequence())
+        seq_val <- current_sequence()
+        data <- if (input$seq_source == "api") protein_data() else NULL
         
-        protein_len_df <- data.frame(start = 0, end = data$sequence$length,
+        protein_len_df <- data.frame(start = 0, end = nchar(seq_val),
                                      ymin = 0.4, ymax = 0.6,
-                                     label = paste0("Protein length: ", data$sequence$length))
+                                     label = paste0("Protein length: ", nchar(seq_val)))
         ## get the domain info
-        domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
-        if (length(domains) == 0) return(NULL)
+        domain_df <- NULL
+        if (input$seq_source == "api" && !is.null(data$features)) {
+            domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
+            if (length(domains) == 0) return(NULL)
         
-        domain_df <- data.frame(
-            start = as.integer(sapply(domains, function(x) x$location$start$value)),
-            end   = as.integer(sapply(domains, function(x) x$location$end$value)),
-            description = sapply(domains, function(x) x$description)
-        )
+            domain_df <- data.frame(
+                start = as.integer(sapply(domains, function(x) x$location$start$value)),
+                end   = as.integer(sapply(domains, function(x) x$location$end$value)),
+                description = sapply(domains, function(x) x$description)
+            )
+        }
         ## get missense variant info
         df <- gnomad_df()
         missense_df <- subset(df, grepl("missense_variant", Consequence, ignore.case = TRUE))
@@ -352,14 +504,24 @@ server <- function(input, output, session) {
         p1 <- ggplot() +
             geom_rect(data = protein_len_df, 
                       aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax, text = label), 
-                      fill = "grey90") +
+                      fill = "grey90")
+        
+        if (!is.null(domain_df)) {
+            p1 <- p1 +
             geom_rect(data = domain_df,
                       aes(xmin = start, xmax = end, ymin = 0.4, ymax = 0.6,
                           text = paste0("Domain: ", description, "\n", start, " - ", end)),
-                      fill = "#fca6a6") +
+                      fill = "#fca6a6")
+        }
+        
+        if (nrow(missense_df) > 0) {
+            p1 <- p1 +
             geom_linerange(data = missense_df,
                            aes(x = AA_Position, ymin = 0.65, ymax = 0.95),
-                           color = "slateblue", size = 0.3, alpha = 0.5) +
+                           color = "slateblue", size = 0.3, alpha = 0.5)
+        }
+        
+        p1 <- p1 +
             theme_minimal() +
             theme(
                 axis.title.y = element_blank(),
@@ -370,7 +532,7 @@ server <- function(input, output, session) {
             labs(x = NULL)
         
         mut_index <- missense_df$AA_Position |> unique()
-        prot_len <- data$sequence$length
+        prot_len <- nchar(seq_val)
         # window <- 3
         user_input <- input$vdvp_window
         if (user_input < 1) {
@@ -401,12 +563,29 @@ server <- function(input, output, session) {
         p1_plotly <- ggplotly(p1, tooltip = "text") %>% layout(margin = list(b = 0))
         p2_plotly <- ggplotly(p2) %>% layout(margin = list(t = 0))
         
-        protein_name <- data$proteinDescription$recommendedName$fullName$value
+        title_text <- if (input$seq_source == "api" && !is.null(data)) {
+            paste0("Protein: ", data$proteinDescription$recommendedName$fullName$value,
+                   "; Gene: ", gene_name())
+        } else {
+            "User uploaded sequence"
+        }
+        
         subplot(p1_plotly, p2_plotly, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
-            layout(title = list(text = paste0("Protein: ", protein_name, "; Gene: ", gene_name()), x = 0, xanchor = "left"),
+            layout(title = list(text = title_text, x = 0, xanchor = "left"),
                    margin = list(t = 60))
     })
     
+    # Read Uploaded PDB File
+    uploaded_pdb <- reactive({
+        req(input$pdb_upload)
+        tryCatch({
+            pdb <- bio3d::read.pdb(input$pdb_upload$datapath)
+            m_bio3d(pdb)
+        }, error = function(e) {
+            showNotification("Failed to parse uploaded PDB file", type = "error")
+            return(NULL)
+        })
+    })
         
     
     # Alphafold API function
@@ -463,11 +642,18 @@ server <- function(input, output, session) {
     
     # 3D structure with r3dmol
     output$structure_view <- renderR3dmol({
-        req(input$pid, input$structure_source)
+        req(input$structure_source)
         
-        shiny::validate(
-            need(nzchar(input$pid), "Please enter a UniProt ID.")
-        )
+        if (input$structure_source == "Upload") {
+            shiny::validate(
+                need(!is.null(input$pdb_upload), "Please upload a PDB file.")
+            )
+        } else {
+            shiny::validate(
+                need(input$fetch > 0, "Please click Fetch after entering UniProt ID.")
+            )
+        }
+        
         uniprot_id <- input$pid
         pdb_data <- NULL
         
@@ -486,6 +672,9 @@ server <- function(input, output, session) {
                 pdb_data <- m_bio3d(bio3d::read.pdb(paste0("https://alphafold.ebi.ac.uk/files/AF-",input$pid,"-F1-model_v4.pdb")))
                 structure_source_real("AlphaFold")
             })
+        } else if (input$structure_source == "Upload") {
+            pdb_data <- uploaded_pdb()
+            structure_source_real("Upload")
         }
 
         r3dmol(
@@ -533,6 +722,12 @@ server <- function(input, output, session) {
                 } else {
                     return("pdb_structure.pdb")
                 }
+            } else if (src == "Upload") {
+                if (!is.null(input$pdb_upload)) {
+                    return(input$pdb_upload$name)
+                } else {
+                    return("uploaded_structure.pdb")
+                }
             }
         },
         
@@ -555,6 +750,9 @@ server <- function(input, output, session) {
                 } else {
                     showNotification("No PDB ID selected for download.", type = "error")
                 }
+            } else if (src == "Upload") {
+                req(input$pdb_upload)
+                file.copy(input$pdb_upload$datapath, file)
             }
         }
     )
@@ -586,7 +784,7 @@ server <- function(input, output, session) {
     fells_class <- reactiveVal("btn-primary")
     
     output$fells_button <- renderUI({
-        req(protein_data())
+        req(current_sequence())
         actionButton("fells", label = "Submit to FELLS", class = fells_class())
     })
     
@@ -599,7 +797,7 @@ server <- function(input, output, session) {
         data <- protein_data()
         req(data)
         
-        seq <- data$sequence$value
+        seq <- current_sequence()
         pseq <- paste0(">", input$pid, "\n", seq)
         
         req <- request("http://protein.bio.unipd.it/fellsws/submit") |> 
