@@ -1,5 +1,6 @@
 library(shiny)
 library(httr)
+library(httr2)
 library(jsonlite)
 library(DT)
 library(r3dmol)
@@ -48,6 +49,12 @@ ui <- fluidPage(
                 condition = "input.seq_source == 'api'",
                 uiOutput("transcript_selector")
             ),
+            hr(),
+            
+            uiOutput("ptm_control_ui"),
+            uiOutput("ptm_filter_ui"),
+            hr(),
+            
             uiOutput("pdb_selector"),
             
             selectInput("structure_source", "Choose Structure Source",
@@ -133,30 +140,32 @@ server <- function(input, output, session) {
     output$tab_basic <- renderUI({
         has_seq <- !is.null(current_sequence())
         has_gnomad <- !is.null(gnomad_df()) && nrow(gnomad_df()) > 0
+        ptm_data <- ptm_df()
         
         if (!has_seq && !has_gnomad) return(helpText("Please upload a FASTA file or a gnomAD CSV."))
+        content <- list()
         
-        tagList(
-            if(has_seq){
-                tagList(
+        if(has_seq){
+            content <- c(content, list(
                     h4("Protein Info"),
                     verbatimTextOutput("info"),
                     h4("Sequence"),
                     verbatimTextOutput("sequence"),
                     h4("Domains"),
                     tableOutput("domain_table")
-                )
-            },
+                ))
+            }
             
             if (has_gnomad) {
-                tagList(
+             content <- c(content, list(
                     h4("GnomAD Summary"),
                     uiOutput("gnomad_summary"),
                     h4("GnomAD Variant Table"),
                     DT::dataTableOutput("gnomad_table")
-                )
+                ))
             }
-        )
+        
+        tagList(content)
     })
     
     # 1D Plot Tab
@@ -474,6 +483,93 @@ server <- function(input, output, session) {
         )
     }, server = FALSE)
     
+    # Function about PTM (Post-Translational Modifications)
+    get_ptm_info <- function(protein_json) {
+        if (is.null(protein_json$features)) return(NULL)
+        
+        ptm_features <- protein_json$features[sapply(protein_json$features, function(x) x$type == "Modified residue")]
+        
+        if (length(ptm_features) == 0) return(NULL)
+        
+        df <- data.frame(
+            Position = as.integer(sapply(ptm_features, function(x) x$location$start$value)),
+            Type = sapply(ptm_features, function(x) x$description)
+        )
+        
+        df
+    }
+    
+    ptm_df <- reactive({
+        data <- protein_data()
+        raw <- get_ptm_info(data)
+        if (is.null(raw)) return(NULL)
+        
+        raw$TypeCategory <- dplyr::case_when(
+            grepl("phospho", raw$Type, ignore.case = TRUE) ~ "Phosphorylation",
+            grepl("acetyl", raw$Type, ignore.case = TRUE) ~ "Acetylation",
+            grepl("succinyl", raw$Type, ignore.case = TRUE) ~ "Succinylation",
+            grepl("methyl", raw$Type, ignore.case = TRUE) ~ "Methylation",
+            TRUE ~ "Other"
+        )
+        
+        raw <- raw |>
+            dplyr::group_by(Position, TypeCategory) |>
+            dplyr::summarise(tooltip = paste(paste0(Position, "：", Type), collapse = "\n"), .groups = "drop")
+        
+        return(raw)
+    })
+    
+    output$ptm_control_ui <- renderUI({
+        req(ptm_df())
+        checkboxInput("show_ptm", "Show PTM Sites", value = FALSE)
+    })
+    
+    output$ptm_filter_ui <- renderUI({
+        df <- ptm_df()
+        req(df)
+        ptm_color_map <- c(
+            "Phosphorylation" = "#1f77b4",
+            "Acetylation"     = "#ff7f0e",
+            "Succinylation"   = "#2ca02c",
+            "Methylation"     = "#d62728",
+            "Other"           = "#9467bd"
+        )
+        
+        types_count <- df %>%
+            count(TypeCategory) %>%
+            arrange(desc(n))
+        
+        checkbox_tags <- lapply(seq_len(nrow(types_count)), function(i) {
+            row <- types_count[i, ]
+            color <- ptm_color_map[[row$TypeCategory]]
+            id <- paste0("ptm_", gsub(" ", "_", row$TypeCategory))
+            
+            tags$div(style = "margin-bottom:1.5px;",
+                     tags$label(
+                         tags$input(type = "checkbox", class = "ptm_check", name = "ptm_group", value = row$TypeCategory, checked = "checked"),
+                         tags$span(style = sprintf("display:inline-block;width:10px;height:10px;border-radius:50%%;background:%s;margin-right:6px;", color)),
+                         paste0(row$TypeCategory, " (", row$n, ")")
+                     )
+            )
+        })
+        
+        tags$div(
+            tags$strong("Select PTM types to show:"),
+            tags$div(id = "ptm_checkboxes", checkbox_tags),
+            # JavaScript to update selected checkboxes
+            tags$script(HTML("
+      Shiny.onInputChange('ptm_types', Array.from(document.querySelectorAll('input.ptm_check:checked')).map(x => x.value));
+      document.querySelectorAll('input.ptm_check').forEach(el => {
+        el.addEventListener('change', () => {
+          const values = Array.from(document.querySelectorAll('input.ptm_check:checked')).map(x => x.value);
+          Shiny.setInputValue('ptm_types', values);
+        });
+      });
+    "))
+        )
+    })
+    
+    
     # 1D plot Output
     output$variant_1dplot <- renderPlotly({
         req(current_sequence())
@@ -501,6 +597,9 @@ server <- function(input, output, session) {
         # print(missense_df)
         missense_df <- missense_df[!is.na(missense_df$AA_Position), ]
         
+        ## get PTM info
+        ptm <- ptm_df()
+        
         p1 <- ggplot() +
             geom_rect(data = protein_len_df, 
                       aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax, text = label), 
@@ -521,13 +620,39 @@ server <- function(input, output, session) {
                            color = "slateblue", size = 0.3, alpha = 0.5)
         }
         
+        if (!is.null(ptm) && nrow(ptm) > 0  && isTRUE(input$show_ptm)) {
+            ptm_plot <- if (!is.null(input$ptm_types)) {
+                ptm |> dplyr::filter(TypeCategory %in% input$ptm_types)
+            } else {
+                ptm |> dplyr::filter(FALSE) 
+            }
+            
+            ptm_plot <- ptm |> dplyr::filter(TypeCategory %in% input$ptm_types)
+            
+            if (nrow(ptm_plot) > 0) {
+                ptm_color_map <- c(
+                    "Phosphorylation" = "#1f77b4",
+                    "Acetylation" = "#ff7f0e",
+                    "Succinylation" = "#2ca02c",
+                    "Methylation" = "#d62728",
+                    "Other" = "#9467bd"
+                )
+            
+                p1 <- p1 +
+                    geom_point(data = ptm_plot,
+                           aes(x = Position, y = 1.0, fill = TypeCategory, text = tooltip),
+                           shape = 21, size = 2, color = "black", stroke = 0.3, alpha = 0.8)+
+                    scale_fill_manual(values = ptm_color_map, name = "PTM Type", drop = FALSE)
+            }
+
+        }
+        
         p1 <- p1 +
             theme_minimal() +
             theme(
                 axis.title.y = element_blank(),
                 axis.text.y = element_blank(),
-                axis.ticks.y = element_blank(),
-                legend.position = "none"
+                axis.ticks.y = element_blank()
             ) +
             labs(x = NULL)
         
@@ -560,7 +685,7 @@ server <- function(input, output, session) {
                 plot.title = element_blank()
             )
         
-        p1_plotly <- ggplotly(p1, tooltip = "text") %>% layout(margin = list(b = 0))
+        p1_plotly <- ggplotly(p1, tooltip = "text") %>% layout(margin = list(b = 0), showlegend = TRUE, legend = list(orientation = "h", x = 0, xanchor = "left", y = 1.1))
         p2_plotly <- ggplotly(p2) %>% layout(margin = list(t = 0))
         
         title_text <- if (input$seq_source == "api" && !is.null(data)) {
