@@ -43,7 +43,6 @@ ui <- fluidPage(
             
             textInput("pid", "Enter UniProt ID"),
             actionButton("fetch", "Fetch info"), 
-            hr(),
             
             conditionalPanel(
                 condition = "input.seq_source == 'api'",
@@ -51,8 +50,12 @@ ui <- fluidPage(
             ),
             hr(),
             
+            h4("1D Plot"),
             uiOutput("ptm_control_ui"),
             uiOutput("ptm_filter_ui"),
+            
+            fileInput("consurf_txt", "Upload ConSurf TXT File", accept = c(".txt")),
+            actionButton("add_consurf", "Add ConSurf Layer", icon = icon("plus")),
             hr(),
             
             uiOutput("pdb_selector"),
@@ -178,6 +181,8 @@ server <- function(input, output, session) {
                       placement = "right", 
                       trigger = "hover"),
             plotlyOutput("variant_1dplot", height="600px"),
+            br(),
+            uiOutput("consurf_plot_ui"),
             br(),
             conditionalPanel(
                 condition = "output.fellsAvailable == true",
@@ -357,6 +362,44 @@ server <- function(input, output, session) {
         tx <- input$selected_transcript
         matched_gene <- tx_df$external_gene_name[tx_df$ensembl_transcript_id == tx]
         if (length(matched_gene) > 0 && nzchar(matched_gene)) matched_gene else "Unknown Gene"
+    })
+    
+    # Read txt File from Consurf
+    read_consurf_txt <- function(file_path) {
+      df <- read.delim(file_path, skip = 27, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+      colnames(df) <- trimws(colnames(df))
+      
+      df_clean <- df %>%
+        dplyr::select(Position = POS, Score = SCORE, Grade = COLOR) %>%
+        dplyr::mutate(
+          Position = as.integer(Position),
+          Score = as.numeric(Score),
+          Grade = as.integer(Grade)
+        )
+      return(df_clean)
+    }
+    
+    consurf_txt_df <- reactive({
+      req(input$consurf_txt)
+      tryCatch({
+        read_consurf_txt(input$consurf_txt$datapath)
+      }, error = function(e){
+        showNotification("Failed to read ConSurf TXT file", type = "error")
+        NULL
+      })
+    })
+    
+    consurf_enabled <- reactiveVal(FALSE)
+    observe({
+      if (!is.null(input$consurf_txt)) {
+        shinyjs::enable("add_consurf")
+      } else {
+        shinyjs::disable("add_consurf")
+      }
+    })
+    observeEvent(input$add_consurf, {
+      req(consurf_txt_df())  
+      consurf_enabled(TRUE)  
     })
     
     # Basic info output
@@ -569,6 +612,10 @@ server <- function(input, output, session) {
         )
     })
     
+    # Consurf colors
+    consurf_colors <- c(
+      "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
+      "5" = "#FFFFFF", "6" = "#FBECF1", "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664")
     
     # 1D plot Output
     output$variant_1dplot <- renderPlotly({
@@ -644,7 +691,19 @@ server <- function(input, output, session) {
                            shape = 21, size = 2, color = "black", stroke = 0.3, alpha = 0.8)+
                     scale_fill_manual(values = ptm_color_map, name = "PTM Type", drop = FALSE)
             }
-
+        }
+        
+        if (consurf_enabled() && !is.null(consurf_txt_df())) {
+          consurf_data <- consurf_txt_df()
+          consurf_data <- consurf_data %>% filter(!is.na(Position), !is.na(Grade))
+          consurf_data$Color <- consurf_colors[as.character(consurf_data$Grade)]
+          
+          p1 <- p1 + 
+            geom_linerange(data = consurf_data,
+                           mapping = aes(x = Position, ymin = 0.15, ymax = 0.25),
+                           inherit.aes = FALSE,
+                           color = consurf_data$Color,
+                           size = 1.0, alpha = 0.9)
         }
         
         p1 <- p1 +
@@ -698,6 +757,25 @@ server <- function(input, output, session) {
         subplot(p1_plotly, p2_plotly, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
             layout(title = list(text = title_text, x = 0, xanchor = "left"),
                    margin = list(t = 60))
+    })
+    
+    # Consurf Plot
+    output$consurf_plot_ui <- renderUI({
+      req(consurf_txt_df())
+      tagList(
+        plotOutput("consurf_txt_plot", height = "400px")
+      )
+    })
+    
+    output$consurf_txt_plot <- renderPlot({
+      req(consurf_txt_df())
+      df <- consurf_txt_df()
+      
+      ggplot(df, aes(x = Position, y = Score, fill = factor(Grade))) +
+        geom_col(width = 1) +
+        scale_fill_manual(values = consurf_cols, name = "ConSurf Grade") +
+        theme_minimal() +
+        labs(title = "ConSurf Conservation Score", x = "Residue Position", y = "Score")
     })
     
     # Read Uploaded PDB File
