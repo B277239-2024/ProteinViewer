@@ -22,6 +22,8 @@ ui <- fluidPage(
     # Sidebar with a slider input for number of bins 
     sidebarLayout(
         sidebarPanel(
+          width = 3,
+          style = "max-width: 350px;",
           # Basic Info
           conditionalPanel(
             condition = "input.main_tabs == 'Basic Info'",
@@ -79,7 +81,21 @@ ui <- fluidPage(
             checkboxInput("spin", "Spin Structure", value = FALSE),
             checkboxInput("surface", "Show Surface", value = FALSE),
             checkboxInput("labels", "Show Mutation Labels", value = FALSE),
-            actionButton("selectSpheres", "Highlight Variants with Spheres")
+            numericInput("first", "First Residue", value = 1, min = 1),
+            numericInput("last", "Last Residue", value = NULL, min = 1),
+            actionButton("selectSpheres", "Highlight Variants with Spheres"),
+            tags$hr(),
+            sliderInput(
+              inputId = "set_slab",
+              label = "Set slab viewing depth",
+              min = -150,
+              max = 150,
+              value = c(-150, 150),
+              step = 10,
+              dragRange = TRUE,
+              animate = TRUE
+            ),
+            helpText("Adjust to clip front/back layers of the structure")
           )
         ),
 
@@ -141,7 +157,7 @@ get_transcripts_by_uniprot <- function(uniprot_id, canonical_tx) {
         values = uniprot_id,
         mart = ensembl
     )
-    print(result)
+    #print(result)
     
     # only keep transcript about protein coding
     protein_tx <- subset(result, transcript_biotype == "protein_coding")
@@ -806,8 +822,17 @@ server <- function(input, output, session) {
             return(NULL)
         })
     })
-        
     
+    # control residue length dynamically
+    observe({
+      seq <- current_sequence()
+      if (!is.null(seq)) {
+        len <- nchar(seq)
+        updateNumericInput(session, "first", max = len, value = 1)
+        updateNumericInput(session, "last", max = len, value = len)
+      }
+    })
+        
     # Alphafold API function
     fetch_alphafold_prediction <- function(uniprot_id) {
         url <- paste0("https://alphafold.ebi.ac.uk/api/prediction/", uniprot_id)
@@ -1013,10 +1038,18 @@ server <- function(input, output, session) {
         }
     })
     
+    missense_df_3d <- reactive({
+      df <- missense_df()
+      req(df, input$first, input$last)
+      
+      df <- df[df$AA_Position >= input$first & df$AA_Position <= input$last, ]
+      df
+    })
+    
     # Labels about missense position
     observeEvent(input$labels, {
       req(input$labels %in% c(TRUE, FALSE))
-      resis <- missense_df()$AA_Position |> unique()
+      resis <- missense_df_3d()$AA_Position |> unique()
       req(length(resis) > 0)
       
       if (input$labels) {
@@ -1039,7 +1072,7 @@ server <- function(input, output, session) {
     cols_3d <- c("#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b")
     radii_3d <- c(1.15, 1.5, 1.85, 2.15, 2.5, 2.85)
     missense_af_groups <- reactive({
-      df <- missense_df()
+      df <- missense_df_3d()
       req(df)
       
       df <- df[!is.na(df$AF), ]
@@ -1079,6 +1112,14 @@ server <- function(input, output, session) {
           )
         }
       }
+    })
+    
+    observeEvent(input$set_slab, {
+      m_set_slab(
+        id = "structure_view",  # same as the r3dmol Output id
+        near = input$set_slab[1],
+        far = input$set_slab[2]
+      )
     })
     
     fells_job <- reactiveVal()
