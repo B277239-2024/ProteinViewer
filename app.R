@@ -13,6 +13,7 @@ library(plotly)
 library(patchwork)
 library(shinyBS)
 library(shinyjs)
+library(shinyWidgets)
 
 # Define UI for application
 ui <- fluidPage(
@@ -81,6 +82,10 @@ ui <- fluidPage(
             checkboxInput("spin", "Spin Structure", value = FALSE),
             checkboxInput("surface", "Show Surface", value = FALSE),
             checkboxInput("labels", "Show Mutation Labels", value = FALSE),
+            #test1
+            fileInput("consurf_pdb_upload", "Upload ConSurf PDB", accept = ".pdb"),
+            checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE), #
+            
             numericInput("first", "First Residue", value = 1, min = 1),
             numericInput("last", "Last Residue", value = NULL, min = 1),
             actionButton("selectSpheres", "Highlight Variants with Spheres"),
@@ -233,6 +238,9 @@ server <- function(input, output, session) {
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
             textOutput("structure_info"),
+            #test1
+            uiOutput("consurf_legend_ui"), 
+            br(),#
             downloadButton("download_pdb", "Download PDB File")
         )
     })
@@ -1113,6 +1121,94 @@ server <- function(input, output, session) {
         }
       }
     })
+    
+    #test1
+    output$consurf_legend_ui <- renderUI({
+      req(input$toggle_consurf_3d)
+      
+      if (isTRUE(input$toggle_consurf_3d)) {
+        consurf_colors <- c(
+          "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
+          "5" = "#FFFFFF", "6" = "#FBECF1", "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664"
+        )
+        
+        tags$div(
+          style = "margin-top: 10px;",
+          strong("ConSurf Grade Legend:"),
+          tags$div(
+            style = "display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px;",
+            lapply(names(consurf_colors), function(g) {
+              tags$div(
+                style = paste0(
+                  "background-color:", consurf_colors[[g]], ";",
+                  "width: 28px; height: 22px; text-align: center;",
+                  "border: 1px solid #999; font-size: 12px; line-height: 22px;"
+                ),
+                g
+              )
+            })
+          )
+        )
+      } else {
+        NULL
+      }
+    })
+    uploaded_consurf_pdb <- reactive({
+      req(input$consurf_pdb_upload)
+      tryCatch({
+        path <- input$consurf_pdb_upload$datapath
+        list(
+          bio3d = bio3d::read.pdb(path),
+          text = readChar(path, file.info(path)$size)
+        )
+      }, error = function(e) {
+        showNotification("Failed to read ConSurf PDB file", type = "error")
+        NULL
+      })
+    })
+    
+    observeEvent(input$toggle_consurf_3d, {
+      req(input$toggle_consurf_3d %in% c(TRUE, FALSE))
+      req(consurf_txt_df(), uploaded_consurf_pdb())  # 不再依赖 consurf_enabled
+      
+      # 保守性得分数据
+      consurf_data <- consurf_txt_df() %>%
+        dplyr::filter(!is.na(Position), !is.na(Grade))
+      
+      # 结构中实际存在的氨基酸编号
+      pdb_resnos <- unique(uploaded_consurf_pdb()$bio3d$atom$resno)
+      consurf_data <- consurf_data %>% dplyr::filter(Position %in% pdb_resnos)
+      
+      # 配色方案（ConSurf Grade 1-9）
+      consurf_colors <- c(
+        "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
+        "5" = "#FFFFFF", "6" = "#FBECF1", "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664"
+      )
+      
+      if (isTRUE(input$toggle_consurf_3d)) {
+        # 批量设置 cartoon 样式
+        for (i in seq_len(nrow(consurf_data))) {
+          resi <- consurf_data$Position[i]
+          grade <- as.character(consurf_data$Grade[i])
+          color <- consurf_colors[[grade]]
+          if (!is.null(color)) {
+            m_add_style(
+              id = "structure_view",
+              sel = m_sel(resi = resi),
+              style = m_style_cartoon(color = color)
+            )
+          }
+        }
+        showNotification("ConSurf coloring applied to 3D structure.", type = "message")
+      } else {
+        # 恢复默认 cartoon 色谱
+        m_set_style(
+          id = "structure_view",
+          style = m_style_cartoon(color = "spectrum")
+        )
+        showNotification("ConSurf coloring removed from 3D structure.", type = "default")
+      }
+    }) #
     
     observeEvent(input$set_slab, {
       m_set_slab(
