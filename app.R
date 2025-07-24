@@ -22,54 +22,65 @@ ui <- fluidPage(
     # Sidebar with a slider input for number of bins 
     sidebarLayout(
         sidebarPanel(
+          # Basic Info
+          conditionalPanel(
+            condition = "input.main_tabs == 'Basic Info'",
             radioButtons("seq_source", "Sequence Source",
                          choices = c("API" = "api", "Upload File" = "upload"),
                          selected = "api",
                          inline = TRUE),
-            
             conditionalPanel(
-                condition = "input.seq_source == 'upload'",
-                fileInput("fasta_upload", "Upload FASTA File", 
-                          accept = c(".fasta", ".fa"),
-                          placeholder = "Upload a FASTA file")
+              condition = "input.seq_source == 'upload'",
+              fileInput("fasta_upload", "Upload FASTA File", 
+                        accept = c(".fasta", ".fa"),
+                        placeholder = "Upload a FASTA file")
             ),
             conditionalPanel(
-                condition = "input.seq_source == 'upload'",
-                fileInput("gnomad_upload", "Upload gnomAD-like CSV",
-                          accept = c(".csv"),
-                          placeholder = "Optional variant CSV with HGVSp column"),
-                helpText("Optional. Must contain HGVSp column like 'p.Arg12Cys'.")
+              condition = "input.seq_source == 'upload'",
+              fileInput("gnomad_upload", "Upload gnomAD-like CSV",
+                        accept = c(".csv"),
+                        placeholder = "Optional variant CSV with HGVSp column"),
+              helpText("Optional. Must contain HGVSp column like 'p.Arg12Cys'.")
             ),
-            
             textInput("pid", "Enter UniProt ID"),
-            actionButton("fetch", "Fetch info"), 
-            
+            actionButton("fetch", "Fetch info"),
+            tags$div(style = "margin-top: 10px;"), 
             conditionalPanel(
-                condition = "input.seq_source == 'api'",
-                uiOutput("transcript_selector")
-            ),
-            hr(),
-            
-            h4("1D Plot"),
+              condition = "input.seq_source == 'api'",
+              uiOutput("transcript_selector")
+            )
+          ),
+          
+          # 1D Plot
+          conditionalPanel(
+            condition = "input.main_tabs == '1D Plot'",
             uiOutput("ptm_control_ui"),
             uiOutput("ptm_filter_ui"),
-            
             fileInput("consurf_txt", "Upload ConSurf TXT File", accept = c(".txt")),
             actionButton("add_consurf", "Add ConSurf Layer", icon = icon("plus")),
-            hr(),
-            
-            uiOutput("pdb_selector"),
-            
+            tags$div(style = "margin-top: 15px;"), 
+            uiOutput("fells_button")
+          ),
+          
+          # 3D Structure
+          conditionalPanel(
+            condition = "input.main_tabs == '3D Structure'",
             selectInput("structure_source", "Choose Structure Source",
                         choices = c("AlphaFold", "PDB", "Upload"),
                         selected = "AlphaFold"),
             conditionalPanel(
-                condition = "input.structure_source == 'Upload'",
-                fileInput("pdb_upload", "Upload PDB File", accept = c(".pdb"))
+              condition = "input.structure_source == 'Upload'",
+              fileInput("pdb_upload", "Upload PDB File", accept = c(".pdb"))
             ),
-            uiOutput("structure_controls"), 
-            hr(),
-            uiOutput("fells_button")
+            uiOutput("pdb_selector"),
+            selectInput("set_style", "Choose Structure Style",
+                        choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
+                        selected = "Cartoon"),
+            checkboxInput("spin", "Spin Structure", value = FALSE),
+            checkboxInput("surface", "Show Surface", value = FALSE),
+            checkboxInput("labels", "Show Mutation Labels", value = FALSE),
+            actionButton("selectSpheres", "Highlight Variants with Spheres")
+          )
         ),
 
         # Show a plot of the generated distribution
@@ -202,21 +213,9 @@ server <- function(input, output, session) {
             downloadButton("download_pdb", "Download PDB File")
         )
     })
-    
-    
-    output$structure_controls <- renderUI({
-        req(input$structure_source)
-        
-        tagList(
-            selectInput("set_style", "Choose Structure Style",
-                        choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
-                        selected = "Cartoon"),
-            checkboxInput("spin", "Spin Structure", value = FALSE),
-            checkboxInput("surface", "Show Surface", value = FALSE)
-        )
-    })
 
     observe({
+      req(input$seq_source)
         if (input$seq_source == "upload") {
             shinyjs::disable("fetch")
         } else {
@@ -249,6 +248,7 @@ server <- function(input, output, session) {
     })
     
     current_sequence <- reactive({
+      req(input$seq_source)
         if (input$seq_source == "upload") {
             if (!is.null(input$fasta_upload)) {
                 return(uploaded_fasta_seq())
@@ -322,6 +322,7 @@ server <- function(input, output, session) {
     })
     
     gnomad_df <- reactive({
+      req(input$seq_source)
         if (input$seq_source == "upload") {
             uploaded_gnomad_df()
         } else {
