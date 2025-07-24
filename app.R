@@ -47,7 +47,7 @@ ui <- fluidPage(
             tags$div(style = "margin-top: 10px;"), 
             conditionalPanel(
               condition = "input.seq_source == 'api'",
-              uiOutput("transcript_selector")
+              selectInput("selected_transcript", "Select Transcript", choices = NULL)
             )
           ),
           
@@ -132,19 +132,26 @@ fetch_gnomad_by_transcript <- function(transcript_id) {
 }
 
 # Get transcript ID by Uniprot ID
-get_transcripts_by_uniprot <- function(uniprot_id) {
+get_transcripts_by_uniprot <- function(uniprot_id, canonical_tx) {
     ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
     
     result <- getBM(
-        attributes = c("uniprotswissprot", "ensembl_transcript_id", "external_gene_name", "transcript_biotype"),
+        attributes = c("uniprotswissprot", "ensembl_transcript_id", "external_gene_name", "transcript_biotype", "transcript_is_canonical"),
         filters = "uniprotswissprot",
         values = uniprot_id,
         mart = ensembl
     )
+    print(result)
     
-    # option: only keep transcript about protein coding
+    # only keep transcript about protein coding
     protein_tx <- subset(result, transcript_biotype == "protein_coding")
     protein_tx <- unique(protein_tx)
+    
+    #print(protein_tx$ensembl_transcript_id[which(protein_tx$transcript_is_canonical == 1)])
+    
+    canonical_id <- protein_tx$ensembl_transcript_id[which(protein_tx$transcript_is_canonical == 1)][1]
+    if (!is.null(canonical_id)) canonical_tx(canonical_id)
+    
     return(protein_tx)
 }
 
@@ -213,6 +220,8 @@ server <- function(input, output, session) {
             downloadButton("download_pdb", "Download PDB File")
         )
     })
+    
+    canonical_tx <- reactiveVal(NULL)
 
     observe({
       req(input$seq_source)
@@ -262,14 +271,16 @@ server <- function(input, output, session) {
     })
     
     # Get the transcripts ID
-    output$transcript_selector <- renderUI({
-        tx_df <- transcript_table()
-        if (nrow(tx_df) == 0) return(helpText("No transcript IDs found."))
-        
-        choices <- setNames(tx_df$ensembl_transcript_id, 
-                            paste0(tx_df$ensembl_transcript_id, " (", tx_df$external_gene_name, ")"))
-        
-        selectInput("selected_transcript", "Select Transcript", choices = choices)
+    observeEvent(transcript_table(), {
+      tx_df <- transcript_table()
+      if (nrow(tx_df) == 0) return(helpText("No transcript IDs found."))
+      
+      choices <- setNames(tx_df$ensembl_transcript_id, 
+                          paste0(tx_df$ensembl_transcript_id, " (", tx_df$external_gene_name, ")"))
+      
+      updateSelectInput(session, "selected_transcript",
+                        choices = choices,
+                        selected = canonical_tx())
     })
     
     # Get Gnomad Data
@@ -355,7 +366,7 @@ server <- function(input, output, session) {
     
     transcript_table <- reactive({
         req(input$pid)
-        get_transcripts_by_uniprot(input$pid)
+        get_transcripts_by_uniprot(input$pid, canonical_tx)
     })
     
     gene_name <- reactive({
@@ -848,6 +859,20 @@ server <- function(input, output, session) {
     })
     
     structure_source_real <- reactiveVal(NULL)
+    
+    observeEvent(input$selected_transcript, {
+      req(canonical_tx(), input$selected_transcript)
+      
+      if (canonical_tx() != input$selected_transcript) {
+        showNotification(
+          paste0("Current 3D structure is based on canonical transcript: ", canonical_tx(),
+                 ", but you selected: ", input$selected_transcript, 
+                 ". Mapping may be inaccurate."),
+          type = "warning",
+          duration = 8
+        )
+      }
+    })
     
     # 3D structure with r3dmol
     output$structure_view <- renderR3dmol({
