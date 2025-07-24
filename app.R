@@ -365,6 +365,14 @@ server <- function(input, output, session) {
         if (length(matched_gene) > 0 && nzchar(matched_gene)) matched_gene else "Unknown Gene"
     })
     
+    missense_df <- reactive({
+      df <- gnomad_df()
+      req(df)
+      df <- subset(df, grepl("missense_variant", df$Consequence, ignore.case = TRUE))
+      df <- df[!is.na(df$AA_Position), ]
+      df
+    })
+    
     # Read txt File from Consurf
     read_consurf_txt <- function(file_path) {
       df <- read.delim(file_path, skip = 27, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
@@ -640,10 +648,7 @@ server <- function(input, output, session) {
             )
         }
         ## get missense variant info
-        df <- gnomad_df()
-        missense_df <- subset(df, grepl("missense_variant", Consequence, ignore.case = TRUE))
-        # print(missense_df)
-        missense_df <- missense_df[!is.na(missense_df$AA_Position), ]
+        missense_df <- missense_df()
         
         ## get PTM info
         ptm <- ptm_df()
@@ -981,6 +986,74 @@ server <- function(input, output, session) {
         } else {
             m_remove_all_surfaces(id = "structure_view")
         }
+    })
+    
+    # Labels about missense position
+    observeEvent(input$labels, {
+      req(input$labels %in% c(TRUE, FALSE))
+      resis <- missense_df()$AA_Position |> unique()
+      req(length(resis) > 0)
+      
+      if (input$labels) {
+        m_add_res_labels(
+          id = "structure_view",
+          sel = m_sel(resi = resis),
+          style = m_style_label(
+            backgroundColor = "#FF6F61",
+            inFront = TRUE,
+            fontSize = 12,
+            showBackground = TRUE
+          )
+        )
+      } else {
+        m_remove_all_labels(id = "structure_view")
+      }
+    })
+    
+    # Highlight Variants with Spheres
+    cols_3d <- c("#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b")
+    radii_3d <- c(1.15, 1.5, 1.85, 2.15, 2.5, 2.85)
+    missense_af_groups <- reactive({
+      df <- missense_df()
+      req(df)
+      
+      df <- df[!is.na(df$AF), ]
+      df <- df %>%
+        mutate(
+          LogAF = log10(AF * 1e6 + 1e-6),
+          AF_Group = case_when(
+            LogAF <= 1 ~ 1,
+            LogAF <= 2 ~ 2,
+            LogAF <= 3 ~ 3,
+            LogAF <= 4 ~ 4,
+            LogAF <= 5 ~ 5,
+            TRUE ~ 6
+          )
+        )
+      
+      lapply(1:6, function(g) {
+        sort(unique(df$AA_Position[df$AF_Group == g]))
+      })
+    })
+    
+    observeEvent(input$selectSpheres, {
+      resi_groups <- missense_af_groups()
+      req(length(resi_groups) == 6)
+      
+      for (i in 1:6) {
+        positions <- resi_groups[[i]]
+        if (length(positions) > 0) {
+          m_add_style(
+            id = "structure_view",
+            sel = m_sel(resi = positions, atom = "CA"),
+            style = m_style_sphere(
+              color = cols_3d[i],
+              colorScheme = "prop",
+              radius = radii_3d[i]
+            )
+          )
+        }
+      }
     })
     
     fells_job <- reactiveVal()
