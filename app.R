@@ -13,7 +13,8 @@ library(plotly)
 library(patchwork)
 library(shinyBS)
 library(shinyjs)
-library(shinyWidgets)
+library(readr)
+library(stringr)
 
 # Define UI for application
 ui <- fluidPage(
@@ -62,7 +63,14 @@ ui <- fluidPage(
             fileInput("consurf_txt", "Upload ConSurf TXT File", accept = c(".txt")),
             actionButton("add_consurf", "Add ConSurf Layer", icon = icon("plus")),
             tags$div(style = "margin-top: 15px;"), 
-            uiOutput("fells_button")
+            uiOutput("fells_button"),
+            tags$hr(),
+            h4("AlphaMissense"),
+            fileInput("alphamissense_upload", "Upload AlphaMissense CSV", accept = ".csv"),
+            checkboxGroupInput("am_prediction_filter", "Prediction Category",
+                               choices = c("likely_benign", "ambiguous", "likely_pathogenic"),
+                               selected = NULL),
+            helpText("Choose prediction types to display on heatmap.")
           ),
           
           # 3D Structure
@@ -227,7 +235,10 @@ server <- function(input, output, session) {
                 condition = "output.fellsAvailable == true",
                 h4("FELLS Result"),
                 plotOutput("fells_plot", height = "500px")
-            )
+            ),
+            br(),
+            h4("AlphaMissense Pathogenicity Heatmap"),
+            plotOutput("alphamissense_heatmap", height = "500px")
         )
     })
     
@@ -444,6 +455,32 @@ server <- function(input, output, session) {
     observeEvent(input$add_consurf, {
       req(consurf_txt_df())  
       consurf_enabled(TRUE)  
+    })
+    
+    # Alphamissense data
+    alphamissense_df <- reactive({
+      req(input$alphamissense_upload)
+      df <- read_csv(input$alphamissense_upload$datapath, show_col_types = FALSE)
+      
+      df <- df %>%
+        mutate(
+          aa_from = str_sub(protein_variant, 1, 1),
+          position = as.integer(str_extract(protein_variant, "\\d+")),
+          aa_to = str_sub(protein_variant, -1, -1),
+          aa_to = factor(aa_to, levels = rev(c(
+            "A", "C", "D", "E", "F", "G", "H", "I", "K", 
+            "L", "M", "N", "P", "Q", "R", "S", "T", "V", 
+            "W", "Y"
+          ))),
+          am_class = recode(am_class,
+                            "Amb" = "ambiguous",
+                            "LBen" = "likely_benign",
+                            "LPath" = "likely_pathogenic")
+        ) %>%
+        rename(score = am_pathogenicity)
+      
+      #print(df)
+      df
     })
     
     # Basic info output
@@ -818,6 +855,58 @@ server <- function(input, output, session) {
         theme_minimal() +
         labs(title = "ConSurf Conservation Score", x = "Residue Position", y = "Score")
     })
+    
+    # Alphamissense Heatmap Plot
+    output$alphamissense_heatmap <- renderPlot({
+      df <- alphamissense_df()
+      req(nrow(df) > 0)
+      
+      # filter prediction
+      if (!is.null(input$am_prediction_filter) && length(input$am_prediction_filter) > 0) {
+        if ("am_class" %in% colnames(df)) {
+          df <- df[df$am_class %in% input$am_prediction_filter, ]
+        }
+      }
+      req(nrow(df) > 0)
+      
+      # Dynamic title
+      file_name <- input$alphamissense_upload$name
+      dynamic_title <- if (!is.null(input$pid) && nzchar(input$pid)) {
+        paste0("AlphaMissense Heatmap - ", input$pid)
+      } else {
+        paste0("AlphaMissense Heatmap - ", file_name)
+      }
+      
+      # Ref aa
+      ref_df <- df %>%
+        select(position, aa_from) %>%
+        distinct() %>%
+        mutate(aa_from = factor(aa_from, levels = levels(df$aa_to)))
+      
+      ggplot(df, aes(x = position, y = aa_to, fill = score)) +
+        geom_tile(color = NA) +
+        geom_tile(data = ref_df, aes(x = position, y = aa_from),
+                  inherit.aes = FALSE,
+                  fill = "black", width = 1, height = 1, alpha = 0.9) +
+        scale_fill_gradientn(
+          colors = c("blue", "white", "red"),
+          values = scales::rescale(c(0, 0.5, 1)),
+          limits = c(0, 1),
+          name = "Score"
+        ) +
+        labs(
+          title = dynamic_title,
+          x = "Residue Position",
+          y = "Alternative Amino Acid"
+        ) +
+        theme_minimal() +
+        theme(
+          axis.text.x = element_text(size = 7),
+          axis.text.y = element_text(size = 8),
+          panel.grid = element_blank()
+        )
+    })
+    
     
     # Read Uploaded PDB File
     uploaded_pdb <- reactive({
