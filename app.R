@@ -238,7 +238,7 @@ server <- function(input, output, session) {
             ),
             br(),
             h4("AlphaMissense Pathogenicity Heatmap"),
-            plotOutput("alphamissense_heatmap", height = "500px")
+            plotlyOutput("alphamissense_heatmap", height = "500px")
         )
     })
     
@@ -857,7 +857,7 @@ server <- function(input, output, session) {
     })
     
     # Alphamissense Heatmap Plot
-    output$alphamissense_heatmap <- renderPlot({
+    output$alphamissense_heatmap <- renderPlotly({
       df <- alphamissense_df()
       req(nrow(df) > 0)
       
@@ -883,9 +883,19 @@ server <- function(input, output, session) {
         distinct() %>%
         mutate(aa_from = factor(aa_from, levels = levels(df$aa_to)))
       
-      ggplot(df, aes(x = position, y = aa_to, fill = score)) +
-        geom_tile(color = NA) +
-        geom_tile(data = ref_df, aes(x = position, y = aa_from),
+      p <- ggplot()+
+        geom_tile(
+          data = df, aes(x = position, y = aa_to, fill = score,
+                          text = paste0(
+                            "Position: ", position, "<br>",
+                            "From: ", aa_from, " → ", aa_to, "<br>",
+                            "Score: ", round(score, 3), "<br>",
+                            "Prediction: ", am_class
+                          )), color = NA) +
+        geom_tile(
+          data = ref_df %>%
+            mutate(text = paste0("Variant: ", aa_from, position, " (reference)")), 
+          aes(x = position, y = aa_from, text = text),
                   inherit.aes = FALSE,
                   fill = "black", width = 1, height = 1, alpha = 0.9) +
         scale_fill_gradientn(
@@ -905,6 +915,7 @@ server <- function(input, output, session) {
           axis.text.y = element_text(size = 8),
           panel.grid = element_blank()
         )
+      ggplotly(p, tooltip = "text")
     })
     
     
