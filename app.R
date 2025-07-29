@@ -67,6 +67,7 @@ ui <- fluidPage(
             tags$hr(),
             h4("AlphaMissense"),
             fileInput("alphamissense_upload", "Upload AlphaMissense CSV", accept = ".csv"),
+            actionButton("add_alphamissense", "Add AlphaMissense Layer", icon = icon("plus")),
             checkboxGroupInput("am_prediction_filter", "Prediction Category",
                                choices = c("likely_benign", "ambiguous", "likely_pathogenic"),
                                selected = NULL),
@@ -445,6 +446,7 @@ server <- function(input, output, session) {
     })
     
     consurf_enabled <- reactiveVal(FALSE)
+    alphamissense_enabled <- reactiveVal(FALSE)
     observe({
       if (!is.null(input$consurf_txt)) {
         shinyjs::enable("add_consurf")
@@ -455,6 +457,18 @@ server <- function(input, output, session) {
     observeEvent(input$add_consurf, {
       req(consurf_txt_df())  
       consurf_enabled(TRUE)  
+    })
+    
+    observe({
+      if (!is.null(input$alphamissense_upload)) {
+        shinyjs::enable("add_alphamissense")
+      } else {
+        shinyjs::disable("add_alphamissense")
+      }
+    })
+    observeEvent(input$add_alphamissense, {
+      req(alphamissense_df())  
+      alphamissense_enabled(TRUE)
     })
     
     # Alphamissense data
@@ -705,7 +719,7 @@ server <- function(input, output, session) {
         data <- if (input$seq_source == "api") protein_data() else NULL
         
         protein_len_df <- data.frame(start = 0, end = nchar(seq_val),
-                                     ymin = 0.4, ymax = 0.6,
+                                     ymin = 0.45, ymax = 0.55,
                                      label = paste0("Protein length: ", nchar(seq_val)))
         ## get the domain info
         domain_df <- NULL
@@ -733,7 +747,7 @@ server <- function(input, output, session) {
         if (!is.null(domain_df)) {
             p1 <- p1 +
             geom_rect(data = domain_df,
-                      aes(xmin = start, xmax = end, ymin = 0.4, ymax = 0.6,
+                      aes(xmin = start, xmax = end, ymin = 0.45, ymax = 0.55,
                           text = paste0("Domain: ", description, "\n", start, " - ", end)),
                       fill = "#fca6a6")
         }
@@ -741,7 +755,7 @@ server <- function(input, output, session) {
         if (nrow(missense_df) > 0) {
             p1 <- p1 +
             geom_linerange(data = missense_df,
-                           aes(x = AA_Position, ymin = 0.65, ymax = 0.95),
+                           aes(x = AA_Position, ymin = 0.6, ymax = 0.7),
                            color = "slateblue", size = 0.3, alpha = 0.5)
         }
         
@@ -765,7 +779,7 @@ server <- function(input, output, session) {
             
                 p1 <- p1 +
                     geom_point(data = ptm_plot,
-                           aes(x = Position, y = 1.0, fill = TypeCategory, text = tooltip),
+                           aes(x = Position, y = 0.75, fill = TypeCategory, text = tooltip),
                            shape = 21, size = 2, color = "black", stroke = 0.3, alpha = 0.8)+
                     scale_fill_manual(values = ptm_color_map, name = "PTM Type", drop = FALSE)
             }
@@ -778,10 +792,30 @@ server <- function(input, output, session) {
           
           p1 <- p1 + 
             geom_linerange(data = consurf_data,
-                           mapping = aes(x = Position, ymin = 0.15, ymax = 0.25),
+                           mapping = aes(x = Position, ymin = 0.3, ymax = 0.4, 
+                                         text = paste0("ConSurf\n", "Position: ", Position, "\n","Score: ", round(Score, 3), "\n","Grade: ", Grade)),
                            inherit.aes = FALSE,
                            color = consurf_data$Color,
                            size = 1.0, alpha = 0.9)
+        }
+        
+        if (alphamissense_enabled() && !is.null(alphamissense_df())) {
+          alpha_bar_df <- alphamissense_df() %>%
+            dplyr::group_by(position) %>%
+            dplyr::summarise(avg_score = mean(score, na.rm = TRUE), .groups = "drop")
+          
+          p1 <- p1 +
+            geom_linerange(
+              data = alpha_bar_df,
+              aes(
+                x = position,
+                ymin = 0.15,
+                ymax = avg_score * 0.1 + 0.15,
+                text = paste0("AlphaMissense\nPosition: ", position, "\nAvg Score: ", round(avg_score, 3))
+              ),
+              color = "darkgreen",
+              size = 1.0,
+              alpha = 0.8)
         }
         
         p1 <- p1 +
@@ -789,7 +823,8 @@ server <- function(input, output, session) {
             theme(
                 axis.title.y = element_blank(),
                 axis.text.y = element_blank(),
-                axis.ticks.y = element_blank()
+                axis.ticks.y = element_blank(),
+                plot.margin = margin(t = 5, r = 10, b = 5, l = 10)
             ) +
             labs(x = NULL)
         
@@ -832,7 +867,10 @@ server <- function(input, output, session) {
             "User uploaded sequence"
         }
         
-        subplot(p1_plotly, p2_plotly, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+        has_extra_layer <- consurf_enabled() || alphamissense_enabled()
+        subplot_heights <- if (has_extra_layer) c(0.7, 0.3) else c(0.5, 0.5)
+        
+        subplot(p1_plotly, p2_plotly, nrows = 2, shareX = TRUE, titleY = TRUE,heights = subplot_heights) %>%
             layout(title = list(text = title_text, x = 0, xanchor = "left"),
                    margin = list(t = 60))
     })
