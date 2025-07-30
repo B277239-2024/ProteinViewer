@@ -91,9 +91,8 @@ ui <- fluidPage(
             checkboxInput("spin", "Spin Structure", value = FALSE),
             checkboxInput("surface", "Show Surface", value = FALSE),
             checkboxInput("labels", "Show Mutation Labels", value = FALSE),
-            #test1
             fileInput("consurf_pdb_upload", "Upload ConSurf PDB", accept = ".pdb"),
-            checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE), #
+            checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE), 
             
             numericInput("first", "First Residue", value = 1, min = 1),
             numericInput("last", "Last Residue", value = NULL, min = 1),
@@ -250,9 +249,8 @@ server <- function(input, output, session) {
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
             textOutput("structure_info"),
-            #test1
             uiOutput("consurf_legend_ui"), 
-            br(),#
+            br(),
             downloadButton("download_pdb", "Download PDB File")
         )
     })
@@ -1192,6 +1190,28 @@ server <- function(input, output, session) {
       df
     })
     
+    extract_protein_variant <- function(hgvsp) {
+      if (is.na(hgvsp) || hgvsp == "") return(NA)
+      matches <- stringr::str_match(hgvsp, "^p\\.([A-Za-z]{3})(\\d+)([A-Za-z]{3})$")
+      if (any(is.na(matches))) return(NA)
+      
+      aa3to1 <- c(
+        Ala="A", Arg="R", Asn="N", Asp="D", Cys="C",
+        Gln="Q", Glu="E", Gly="G", His="H", Ile="I",
+        Leu="L", Lys="K", Met="M", Phe="F", Pro="P",
+        Ser="S", Thr="T", Trp="W", Tyr="Y", Val="V",
+        Ter="*", Sec="U", Pyl="O", Asx="B", Glx="Z", Xaa="X"
+      )
+      paste0(aa3to1[[matches[2]]], matches[3], aa3to1[[matches[4]]])
+    }
+    
+    alphamissense_color_map <- colorRampPalette(c("blue", "white", "red"))
+    score_to_color <- function(scores) {
+      ramp <- alphamissense_color_map(100)
+      index <- pmin(100, pmax(1, round(scores * 100)))
+      ramp[index]
+    }
+    
     # Labels about missense position
     observeEvent(input$labels, {
       req(input$labels %in% c(TRUE, FALSE))
@@ -1217,50 +1237,65 @@ server <- function(input, output, session) {
     # Highlight Variants with Spheres
     cols_3d <- c("#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b")
     radii_3d <- c(1.15, 1.5, 1.85, 2.15, 2.5, 2.85)
-    missense_af_groups <- reactive({
+    
+    observeEvent(input$selectSpheres, {
       df <- missense_df_3d()
-      req(df)
-      
-      df <- df[!is.na(df$AF), ]
+      req(nrow(df) > 0)
+      # AF groups
       df <- df %>%
+        filter(!is.na(AF)) %>%
         mutate(
-          LogAF = log10(AF * 1e6 + 1e-6),
+          LogAF = ifelse(AF > 0, log10(AF * 1e6), -6),
           AF_Group = case_when(
             LogAF <= 1 ~ 1,
             LogAF <= 2 ~ 2,
             LogAF <= 3 ~ 3,
             LogAF <= 4 ~ 4,
             LogAF <= 5 ~ 5,
-            TRUE ~ 6
+            TRUE       ~ 6)
+        )
+
+      # with alphamissense
+      if (!is.null(input$alphamissense_upload)) {
+        alpha_df <- alphamissense_df()
+        df$protein_variant <- sapply(df$HGVSp, extract_protein_variant)
+        
+        df <- df %>%
+          left_join(alpha_df %>% select(protein_variant, score), by = "protein_variant")
+        
+        df$Color <- ifelse(is.na(df$score), "#AAAAAA", score_to_color(df$score))
+        
+        # keep the variants with highest score
+        df_grouped <- df %>%
+          group_by(AA_Position) %>%
+          summarise(
+            radius = radii_3d[max(AF_Group, na.rm = TRUE)],
+            color = Color[which.max(score)],
+            .groups = "drop")
+      } else{
+        df_grouped <- df %>%
+          group_by(AA_Position) %>%
+          summarise(
+            af_group = max(AF_Group, na.rm = TRUE),
+            radius = radii_3d[af_group],
+            color = cols_3d[af_group],
+            .groups = "drop")
+      }
+      
+      # Spheres
+      for (i in seq_len(nrow(df_grouped))) {
+        m_add_style(
+          id = "structure_view",
+          sel = m_sel(resi = df_grouped$AA_Position[i], atom = "CA"),
+          style = m_style_sphere(
+            color = df_grouped$color[i],
+            radius = df_grouped$radius[i],
+            colorScheme = "none"
           )
         )
-      
-      lapply(1:6, function(g) {
-        sort(unique(df$AA_Position[df$AF_Group == g]))
-      })
-    })
-    
-    observeEvent(input$selectSpheres, {
-      resi_groups <- missense_af_groups()
-      req(length(resi_groups) == 6)
-      
-      for (i in 1:6) {
-        positions <- resi_groups[[i]]
-        if (length(positions) > 0) {
-          m_add_style(
-            id = "structure_view",
-            sel = m_sel(resi = positions, atom = "CA"),
-            style = m_style_sphere(
-              color = cols_3d[i],
-              colorScheme = "prop",
-              radius = radii_3d[i]
-            )
-          )
-        }
       }
     })
     
-    #test1
     output$consurf_legend_ui <- renderUI({
       req(input$toggle_consurf_3d)
       
@@ -1307,24 +1342,20 @@ server <- function(input, output, session) {
     
     observeEvent(input$toggle_consurf_3d, {
       req(input$toggle_consurf_3d %in% c(TRUE, FALSE))
-      req(consurf_txt_df(), uploaded_consurf_pdb())  # 不再依赖 consurf_enabled
+      req(consurf_txt_df(), uploaded_consurf_pdb()) 
       
-      # 保守性得分数据
       consurf_data <- consurf_txt_df() %>%
         dplyr::filter(!is.na(Position), !is.na(Grade))
       
-      # 结构中实际存在的氨基酸编号
       pdb_resnos <- unique(uploaded_consurf_pdb()$bio3d$atom$resno)
       consurf_data <- consurf_data %>% dplyr::filter(Position %in% pdb_resnos)
       
-      # 配色方案（ConSurf Grade 1-9）
       consurf_colors <- c(
         "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
         "5" = "#FFFFFF", "6" = "#FBECF1", "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664"
       )
       
       if (isTRUE(input$toggle_consurf_3d)) {
-        # 批量设置 cartoon 样式
         for (i in seq_len(nrow(consurf_data))) {
           resi <- consurf_data$Position[i]
           grade <- as.character(consurf_data$Grade[i])
@@ -1339,14 +1370,13 @@ server <- function(input, output, session) {
         }
         showNotification("ConSurf coloring applied to 3D structure.", type = "message")
       } else {
-        # 恢复默认 cartoon 色谱
         m_set_style(
           id = "structure_view",
           style = m_style_cartoon(color = "spectrum")
         )
         showNotification("ConSurf coloring removed from 3D structure.", type = "default")
       }
-    }) #
+    }) 
     
     observeEvent(input$set_slab, {
       m_set_slab(
