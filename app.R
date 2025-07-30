@@ -15,6 +15,8 @@ library(shinyBS)
 library(shinyjs)
 library(readr)
 library(stringr)
+library(grid) 
+library(gridExtra)
 
 # Define UI for application
 ui <- fluidPage(
@@ -246,9 +248,10 @@ server <- function(input, output, session) {
     output$tab_3d <- renderUI({
         req(input$structure_source)
         tagList(
+            textOutput("structure_info"),
             withSpinner(r3dmolOutput("structure_view", height = "500px")),
             br(),
-            textOutput("structure_info"),
+            uiOutput("sphere_legend"),
             uiOutput("consurf_legend_ui"), 
             br(),
             downloadButton("download_pdb", "Download PDB File")
@@ -1237,8 +1240,10 @@ server <- function(input, output, session) {
     # Highlight Variants with Spheres
     cols_3d <- c("#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b")
     radii_3d <- c(1.15, 1.5, 1.85, 2.15, 2.5, 2.85)
+    render_legend <- reactiveVal(FALSE)
     
     observeEvent(input$selectSpheres, {
+      render_legend(TRUE)
       df <- missense_df_3d()
       req(nrow(df) > 0)
       # AF groups
@@ -1290,10 +1295,71 @@ server <- function(input, output, session) {
           style = m_style_sphere(
             color = df_grouped$color[i],
             radius = df_grouped$radius[i],
-            colorScheme = "none"
-          )
+            colorScheme = "none"))}
+    })
+    
+    # Spheres legend
+    output$am_score_bar <- renderImage({
+      outfile <- tempfile(fileext = ".png")
+      scores <- seq(0, 1, length.out = 100)
+      df <- data.frame(x = scores, y = 1, score = scores)
+      
+      p <- ggplot(df, aes(x = x, y = y, fill = score)) +
+        geom_tile() +
+        scale_fill_gradientn(colors = colorRampPalette(c("blue", "white", "red"))(100), limits = c(0, 1)) +
+        scale_x_continuous(
+          breaks = seq(0, 1, 0.25),
+          labels = sprintf("%.2f", seq(0, 1, 0.25)),
+          expand = c(0, 0)
+        ) +
+        theme_minimal() +
+        theme(
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(),
+          axis.title.x = element_blank(),
+          plot.margin = margin(5, 10, 5, 10)
         )
-      }
+    
+      label_grob <- gridExtra::grid.arrange(
+        textGrob("Benign", gp = gpar(fontsize = 10), just = "left"),
+        textGrob("Pathogenic", gp = gpar(fontsize = 10), just = "right"),
+        ncol = 2,
+        widths = unit(c(0.5, 0.5), "npc")
+      )
+      
+      png(outfile, width = 500, height = 100)
+      gridExtra::grid.arrange(label_grob, p, ncol = 1, heights = c(0.3, 1))
+      dev.off()
+      
+      list(src = outfile, contentType = "image/png", width = 500, height = 100)
+    }, deleteFile = TRUE)
+    
+    output$sphere_legend <- renderUI({
+      if (!render_legend()) return(NULL)
+      if (!is.null(input$alphamissense_upload)) {
+        tagList(
+          tags$h5("Legend: AlphaMissense + AF-value Mode"),
+          tags$p("Color → AlphaMissense pathogenicity score"),
+          imageOutput("am_score_bar", height = "100px"),
+          tags$p("Blue → benign   |   Red → pathogenic"),
+          tags$p("Sphere size → AF Group (mutation frequency)"),
+          tags$ul(
+            lapply(1:6, function(i) {
+              af_labels <- c("Extremely rare","Very rare","Rare","Low freq.","Common","Very common")
+              tags$li(paste("Group", i, "→ radius =", radii_3d[i], "→", af_labels[i]))})))
+      } else {
+        tagList(
+          tags$h5("Legend: AF-value-only Mode"),
+          tags$p("Color → AF Group"),
+          tags$table(
+            lapply(1:6, function(i) {
+              af_labels <- c("Extremely rare","Very rare","Rare","Low freq.","Common","Very common")
+              tags$tr(
+                tags$td(style = paste0("background-color:", cols_3d[i], ";width:20px;height:20px; border:1px solid #000;"), ""),
+                tags$td(paste("Group", i, "(radius =", radii_3d[i], ")", "→", af_labels[i]))
+              )})))}
     })
     
     output$consurf_legend_ui <- renderUI({
