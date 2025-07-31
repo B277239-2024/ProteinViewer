@@ -17,6 +17,7 @@ library(readr)
 library(stringr)
 library(grid) 
 library(gridExtra)
+library(shinydashboard)
 
 # Define UI for application
 ui <- fluidPage(
@@ -68,7 +69,12 @@ ui <- fluidPage(
             uiOutput("fells_button"),
             tags$hr(),
             h4("AlphaMissense"),
-            fileInput("alphamissense_upload", "Upload AlphaMissense CSV", accept = ".csv"),
+            radioButtons("am_source", "AlphaMissense Source",
+                         choices = c("API" = "api", "Upload File" = "upload"),
+                         selected = "api", inline = TRUE),
+            conditionalPanel(
+              condition = "input.am_source == 'upload'",
+              fileInput("alphamissense_upload", "Upload AlphaMissense CSV", accept = ".csv")),
             actionButton("add_alphamissense", "Add AlphaMissense Layer", icon = icon("plus")),
             checkboxGroupInput("am_prediction_filter", "Prediction Category",
                                choices = c("likely_benign", "ambiguous", "likely_pathogenic"),
@@ -184,6 +190,19 @@ get_transcripts_by_uniprot <- function(uniprot_id, canonical_tx) {
     if (!is.null(canonical_id)) canonical_tx(canonical_id)
     
     return(protein_tx)
+}
+
+# Get Alphamissense file from AFDB
+fetch_alphafold_am_url <- function(uniprot_id) {
+  url <- paste0("https://alphafold.ebi.ac.uk/api/prediction/", uniprot_id)
+  res <- httr::GET(url)
+  if (httr::status_code(res) == 200) {
+    json <- httr::content(res, as = "parsed", type = "application/json")
+    if (!is.null(json[[1]]$amAnnotationsUrl)) {
+      return(json[[1]]$amAnnotationsUrl)
+    }
+  }
+  return(NULL)
 }
 
 # Define server logic
@@ -461,11 +480,9 @@ server <- function(input, output, session) {
     })
     
     observe({
-      if (!is.null(input$alphamissense_upload)) {
-        shinyjs::enable("add_alphamissense")
-      } else {
-        shinyjs::disable("add_alphamissense")
-      }
+      df <- tryCatch(alphamissense_df(), error = function(e) NULL)
+      ready <- !is.null(df) && nrow(df) > 0
+      shinyjs::toggleState("add_alphamissense", condition = ready)
     })
     observeEvent(input$add_alphamissense, {
       req(alphamissense_df())  
@@ -473,9 +490,31 @@ server <- function(input, output, session) {
     })
     
     # Alphamissense data
-    alphamissense_df <- reactive({
-      req(input$alphamissense_upload)
-      df <- read_csv(input$alphamissense_upload$datapath, show_col_types = FALSE)
+    alphamissense_df <- eventReactive(input$fetch, {
+      file_path <- NULL
+      
+      if (input$am_source == "upload") {
+        req(input$alphamissense_upload)
+        file_path <- input$alphamissense_upload$datapath
+      } else {
+        req(input$pid)
+        url <- fetch_alphafold_am_url(input$pid)
+        if (is.null(url)) {
+          showNotification("AlphaMissense annotations not found for this UniProt ID from AFDB, please try to upload the file.", type = "warning")
+          return(NULL)
+        }
+        
+        file_path <- tempfile(fileext = ".csv")
+        tryCatch({
+          download.file(url, destfile = file_path, quiet = TRUE)
+        }, error = function(e) {
+          showNotification("Failed to download AlphaMissense CSV from API.", type = "error")
+          return(NULL)
+        })
+      }
+        
+        
+      df <- read_csv(file_path, show_col_types = FALSE)
       
       df <- df %>%
         mutate(
