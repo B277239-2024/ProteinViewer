@@ -71,7 +71,7 @@ ui <- fluidPage(
             h4("AlphaMissense"),
             radioButtons("am_source", "AlphaMissense Source",
                          choices = c("API" = "api", "Upload File" = "upload"),
-                         selected = "api", inline = TRUE),
+                         selected = character(0), inline = TRUE),
             conditionalPanel(
               condition = "input.am_source == 'upload'",
               fileInput("alphamissense_upload", "Upload AlphaMissense CSV", accept = ".csv")),
@@ -490,13 +490,14 @@ server <- function(input, output, session) {
     })
     
     # Alphamissense data
-    alphamissense_df <- eventReactive(input$fetch, {
+    alphamissense_df <- reactive({
+      req(input$am_source)
       file_path <- NULL
       
       if (input$am_source == "upload") {
         req(input$alphamissense_upload)
         file_path <- input$alphamissense_upload$datapath
-      } else {
+      } else if (input$am_source == "api"){
         req(input$pid)
         url <- fetch_alphafold_am_url(input$pid)
         if (is.null(url)) {
@@ -1300,7 +1301,7 @@ server <- function(input, output, session) {
         )
 
       # with alphamissense
-      if (!is.null(input$alphamissense_upload)) {
+      if (input$am_source == "upload" && !is.null(input$alphamissense_upload)) {
         alpha_df <- alphamissense_df()
         df$protein_variant <- sapply(df$HGVSp, extract_protein_variant)
         
@@ -1316,7 +1317,30 @@ server <- function(input, output, session) {
             radius = radii_3d[max(AF_Group, na.rm = TRUE)],
             color = Color[which.max(score)],
             .groups = "drop")
-      } else{
+      } else if(input$am_source == "api"){
+        alpha_df <- alphamissense_df()
+        if (!is.null(alpha_df) && nrow(alpha_df) > 0) {
+          df$protein_variant <- sapply(df$HGVSp, extract_protein_variant)
+          df <- df %>%
+            left_join(alpha_df %>% select(protein_variant, score), by = "protein_variant")
+          df$Color <- ifelse(is.na(df$score), "#AAAAAA", score_to_color(df$score))
+          df_grouped <- df %>%
+            group_by(AA_Position) %>%
+            summarise(
+              radius = radii_3d[max(AF_Group, na.rm = TRUE)],
+              color = Color[which.max(score)],
+              .groups = "drop")
+        } else {
+        df_grouped <- df %>%
+          group_by(AA_Position) %>%
+          summarise(
+            af_group = max(AF_Group, na.rm = TRUE),
+            radius = radii_3d[af_group],
+            color = cols_3d[af_group],
+            .groups = "drop")
+        }
+      } else {
+        # no AlphaMissense (upload empty or API fail)
         df_grouped <- df %>%
           group_by(AA_Position) %>%
           summarise(
@@ -1377,7 +1401,14 @@ server <- function(input, output, session) {
     
     output$sphere_legend <- renderUI({
       if (!render_legend()) return(NULL)
-      if (!is.null(input$alphamissense_upload)) {
+      show_am <- FALSE
+      if (input$am_source == "upload" && !is.null(input$alphamissense_upload)) {
+        show_am <- TRUE
+      } else if (input$am_source == "api") {
+        df <- alphamissense_df()
+        show_am <- !is.null(df) && nrow(df) > 0
+      }
+      if (show_am) {
         tagList(
           tags$h5("Legend: AlphaMissense + AF-value Mode"),
           tags$p("Color → AlphaMissense pathogenicity score"),
