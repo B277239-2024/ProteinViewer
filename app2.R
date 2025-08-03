@@ -27,78 +27,73 @@ source("modules/mod_basicinfo.R")
 source("R/render_1d_plot.R")
 
 # Define UI for application
-ui <- fluidPage(
-  useShinyjs(),
-  titlePanel("Protein info Viewer"),
-  
-  # Sidebar with a slider input for number of bins 
-  sidebarLayout(
-    sidebarPanel(
-      width = 3,
-      style = "max-width: 350px;",
-      # Basic Info
-      conditionalPanel(
-        condition = "input.main_tabs == 'Basic Info'",
-        mod_basicinfo_ui("bi")
-      ),
-      
-      # 1D Plot
-      conditionalPanel(
-        condition = "input.main_tabs == '1D Plot'",
-        mod_ptm_ui("ptm1"),
-        mod_consurf_1d_ui("consurf1"),
-        tags$div(style = "margin-top: 15px;"), 
-        uiOutput("fells_button"),
-        tags$hr(),
-        h4("AlphaMissense"),
-        mod_alphamissense_ui("am1")
-      ),
-      
-      # 3D Structure
-      conditionalPanel(
-        condition = "input.main_tabs == '3D Structure'",
-        selectInput("structure_source", "Choose Structure Source",
-                    choices = c("AlphaFold", "PDB", "Upload"),
-                    selected = "AlphaFold"),
-        conditionalPanel(
-          condition = "input.structure_source == 'Upload'",
-          fileInput("pdb_upload", "Upload PDB File", accept = c(".pdb"))
-        ),
-        uiOutput("pdb_selector"),
-        selectInput("set_style", "Choose Structure Style",
-                    choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
-                    selected = "Cartoon"),
-        checkboxInput("spin", "Spin Structure", value = FALSE),
-        checkboxInput("surface", "Show Surface", value = FALSE),
-        checkboxInput("labels", "Show Mutation Labels", value = FALSE),
-        fileInput("consurf_pdb_upload", "Upload ConSurf PDB", accept = ".pdb"),
-        checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE), 
-        
-        numericInput("first", "First Residue", value = 1, min = 1),
-        numericInput("last", "Last Residue", value = NULL, min = 1),
-        actionButton("selectSpheres", "Highlight Variants with Spheres"),
-        tags$hr(),
-        sliderInput(
-          inputId = "set_slab",
-          label = "Set slab viewing depth",
-          min = -150,
-          max = 150,
-          value = c(-150, 150),
-          step = 10,
-          dragRange = TRUE,
-          animate = TRUE
-        ),
-        helpText("Adjust to clip front/back layers of the structure")
-      )
+ui <- dashboardPage(
+  dashboardHeader(title = "Protein Info Viewer"),
+  dashboardSidebar(
+    sidebarMenu(id = "main_tabs",
+                menuItem("Basic Info",     tabName = "tab_basic",     icon = icon("info-circle")),
+                menuItem("1D Plot",        tabName = "tab_1dplot",    icon = icon("chart-line")),
+                menuItem("3D Structure",   tabName = "tab_3d",        icon = icon("cube"))
     ),
     
-    # Show a plot of the generated distribution
-    mainPanel(
-      tabsetPanel(id = "main_tabs",
-                  tabPanel("Basic Info", uiOutput("tab_basic")),
-                  tabPanel("1D Plot", uiOutput("tab_1dplot")),
-                  tabPanel("3D Structure", uiOutput("tab_3d"))
-      )
+    # Basic Info Inputs
+    conditionalPanel("input.main_tabs == 'tab_basic'",
+                     mod_basicinfo_ui("bi")
+    ),
+    
+    # 1D Plot Inputs
+    conditionalPanel("input.main_tabs == 'tab_1dplot'",
+                     mod_ptm_ui("ptm1"),
+                     mod_consurf_1d_ui("consurf1"),
+                     tags$div(style = "margin-top: 15px;", uiOutput("fells_button")),
+                     tags$hr(),
+                     h4("AlphaMissense"),
+                     mod_alphamissense_ui("am1")
+    ),
+    
+    # 3D Structure Inputs
+    conditionalPanel("input.main_tabs == 'tab_3d'",
+                     selectInput("structure_source", "Choose Structure Source",
+                                 choices = c("AlphaFold", "PDB", "Upload"),
+                                 selected = "AlphaFold"),
+                     conditionalPanel(
+                       condition = "input.structure_source == 'Upload'",
+                       fileInput("pdb_upload", "Upload PDB File", accept = c(".pdb"))
+                     ),
+                     uiOutput("pdb_selector"),
+                     selectInput("set_style", "Choose Structure Style",
+                                 choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
+                                 selected = "Cartoon"),
+                     checkboxInput("spin", "Spin Structure", value = FALSE),
+                     checkboxInput("surface", "Show Surface", value = FALSE),
+                     checkboxInput("labels", "Show Mutation Labels", value = FALSE),
+                     fileInput("consurf_pdb_upload", "Upload ConSurf PDB", accept = ".pdb"),
+                     checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE), 
+                     
+                     numericInput("first", "First Residue", value = 1, min = 1),
+                     numericInput("last", "Last Residue", value = NULL, min = 1),
+                     actionButton("selectSpheres", "Highlight Variants with Spheres"),
+                     tags$hr(),
+                     sliderInput(
+                       inputId = "set_slab",
+                       label = "Set slab viewing depth",
+                       min = -150,
+                       max = 150,
+                       value = c(-150, 150),
+                       step = 10,
+                       dragRange = TRUE,
+                       animate = TRUE
+                     ),
+                     helpText("Adjust to clip front/back layers of the structure")
+    )
+  ),
+  
+  dashboardBody(
+    useShinyjs(),
+    tabItems(
+      tabItem(tabName = "tab_basic",  uiOutput("tab_basic")),
+      tabItem(tabName = "tab_1dplot", uiOutput("tab_1dplot")),
+      tabItem(tabName = "tab_3d",     uiOutput("tab_3d"))
     )
   )
 )
