@@ -24,6 +24,7 @@ source("modules/mod_consurf.R")
 source("modules/mod_ptm.R")
 source("modules/mod_gnomad.R")
 source("modules/mod_basicinfo.R")
+source("R/render_1d_plot.R")
 
 # Define UI for application
 ui <- fluidPage(
@@ -283,165 +284,20 @@ server <- function(input, output, session) {
   
   # 1D plot Output
   output$variant_1dplot <- renderPlotly({
-    req(bi_res$current_sequence())
-    seq_val <- bi_res$current_sequence()
-    data <- if (bi_res$seq_source() == "api") bi_res$protein_data() else NULL
-    
-    protein_len_df <- data.frame(start = 0, end = nchar(seq_val),
-                                 ymin = 0.45, ymax = 0.55,
-                                 label = paste0("Protein length: ", nchar(seq_val)))
-    ## get the domain info
-    domain_df <- NULL
-    if (bi_res$seq_source() == "api" && !is.null(data$features)) {
-      domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
-      if (length(domains) == 0) return(NULL)
-      
-      domain_df <- data.frame(
-        start = as.integer(sapply(domains, function(x) x$location$start$value)),
-        end   = as.integer(sapply(domains, function(x) x$location$end$value)),
-        description = sapply(domains, function(x) x$description)
-      )
-    }
-    ## get missense variant info
-    missense_df <- missense_df()
-    
-    ## get PTM info
-    ptm <- ptm_res$ptm_df()
-    
-    p1 <- ggplot() +
-      geom_rect(data = protein_len_df, 
-                aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax, text = label), 
-                fill = "grey90")
-    
-    if (!is.null(domain_df)) {
-      p1 <- p1 +
-        geom_rect(data = domain_df,
-                  aes(xmin = start, xmax = end, ymin = 0.45, ymax = 0.55,
-                      text = paste0("Domain: ", description, "\n", start, " - ", end)),
-                  fill = "#fca6a6")
-    }
-    
-    if (nrow(missense_df) > 0) {
-      p1 <- p1 +
-        geom_linerange(data = missense_df,
-                       aes(x = AA_Position, ymin = 0.6, ymax = 0.7),
-                       color = "slateblue", size = 0.3, alpha = 0.5)
-    }
-    
-    if (!is.null(ptm) && nrow(ptm) > 0  && isTRUE(ptm_res$show())) {
-      ptm_plot <- if (!is.null(ptm_res$selected_types())) {
-        ptm |> dplyr::filter(TypeCategory %in% ptm_res$selected_types())
-      } else {
-        ptm |> dplyr::filter(FALSE) 
-      }
-      
-      ptm_plot <- ptm |> dplyr::filter(TypeCategory %in% ptm_res$selected_types())
-      
-      if (nrow(ptm_plot) > 0) {
-        ptm_color_map <- c(
-          "Phosphorylation" = "#1f77b4",
-          "Acetylation" = "#ff7f0e",
-          "Succinylation" = "#2ca02c",
-          "Methylation" = "#d62728",
-          "Other" = "#9467bd"
-        )
-        
-        p1 <- p1 +
-          geom_point(data = ptm_plot,
-                     aes(x = Position, y = 0.75, fill = TypeCategory, text = tooltip),
-                     shape = 21, size = 2, color = "black", stroke = 0.3, alpha = 0.8)+
-          scale_fill_manual(values = ptm_color_map, name = "PTM Type", drop = FALSE)
-      }
-    }
-    
-    if (consurf_res$enabled() && !is.null(consurf_res$consurf_df())) {
-      consurf_data <- consurf_res$consurf_df()
-      consurf_data <- consurf_data %>% filter(!is.na(Position), !is.na(Grade))
-      consurf_data$Color <- consurf_colors[as.character(consurf_data$Grade)]
-      
-      p1 <- p1 + 
-        geom_linerange(data = consurf_data,
-                       mapping = aes(x = Position, ymin = 0.3, ymax = 0.4, 
-                                     text = paste0("ConSurf\n", "Position: ", Position, "\n","Score: ", round(Score, 3), "\n","Grade: ", Grade)),
-                       inherit.aes = FALSE,
-                       color = consurf_data$Color,
-                       size = 1.0, alpha = 0.9)
-    }
-    
-    if (am_res$enabled() && !is.null(am_res$alphamissense_df())) {
-      alpha_bar_df <- am_res$alphamissense_df() %>%
-        dplyr::group_by(position) %>%
-        dplyr::summarise(avg_score = mean(score, na.rm = TRUE), .groups = "drop")
-      
-      p1 <- p1 +
-        geom_linerange(
-          data = alpha_bar_df,
-          aes(
-            x = position,
-            ymin = 0.15,
-            ymax = avg_score * 0.1 + 0.15,
-            text = paste0("AlphaMissense\nPosition: ", position, "\nAvg Score: ", round(avg_score, 3))
-          ),
-          color = "darkgreen",
-          size = 1.0,
-          alpha = 0.8)
-    }
-    
-    p1 <- p1 +
-      theme_minimal() +
-      theme(
-        axis.title.y = element_blank(),
-        axis.text.y = element_blank(),
-        axis.ticks.y = element_blank(),
-        plot.margin = margin(t = 5, r = 10, b = 5, l = 10)
-      ) +
-      labs(x = NULL)
-    
-    mut_index <- missense_df$AA_Position |> unique()
-    prot_len <- nchar(seq_val)
-    # window <- 3
-    user_input <- input$vdvp_window
-    if (user_input < 1) {
-      window <- max(1, floor(prot_len * user_input))  # fraction
-    } else {
-      window <- as.integer(user_input)  # fixed
-    }
-    
-    vp <- length(mut_index) / prot_len
-    
-    index <- 1:prot_len
-    vdvp_vals <- sapply(index, function(x) {
-      vd <- sum(mut_index %in% x:(x + window))
-      vd / window / vp
-    })
-    
-    vdvp_df <- data.frame(x = index + window / 2, y = vdvp_vals)
-    vdvp_df <- as.data.frame(spline(vdvp_df$x, vdvp_df$y))
-    
-    p2 <- ggplot(vdvp_df, aes(x = x, y = y)) +
-      geom_line(color = "steelblue", size = 0.6) +
-      theme_minimal() +
-      labs(x = "Residue", y = "Vd/Vp") +
-      theme(
-        plot.title = element_blank()
-      )
-    
-    p1_plotly <- ggplotly(p1, tooltip = "text") %>% layout(margin = list(b = 0), showlegend = TRUE, legend = list(orientation = "h", x = 0, xanchor = "left", y = 1.1))
-    p2_plotly <- ggplotly(p2) %>% layout(margin = list(t = 0))
-    
-    title_text <- if (bi_res$seq_source() == "api" && !is.null(data)) {
-      paste0("Protein: ", data$proteinDescription$recommendedName$fullName$value,
-             "; Gene: ", gene_name())
-    } else {
-      "User uploaded sequence"
-    }
-    
-    has_extra_layer <- consurf_res$enabled() || am_res$enabled()
-    subplot_heights <- if (has_extra_layer) c(0.7, 0.3) else c(0.5, 0.5)
-    
-    subplot(p1_plotly, p2_plotly, nrows = 2, shareX = TRUE, titleY = TRUE,heights = subplot_heights) %>%
-      layout(title = list(text = title_text, x = 0, xanchor = "left"),
-             margin = list(t = 60))
+    render_1d_plot(
+      seq_val         = bi_res$current_sequence(),
+      protein_data    = if (bi_res$seq_source() == "api") bi_res$protein_data() else NULL,
+      missense_df     = missense_df(),
+      ptm_df          = ptm_res$ptm_df(),
+      ptm_show        = ptm_res$show(),
+      ptm_types       = ptm_res$selected_types(),
+      consurf_df      = consurf_res$consurf_df(),
+      consurf_enabled = consurf_res$enabled(),
+      am_df           = am_res$alphamissense_df(),
+      am_enabled      = am_res$enabled(),
+      vdvp_window     = input$vdvp_window,
+      gene_name       = gene_name()
+    )
   })
   
   # Alphamissense Heatmap Plot
