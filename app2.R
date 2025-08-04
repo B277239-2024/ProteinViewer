@@ -18,6 +18,7 @@ library(stringr)
 library(grid) 
 library(gridExtra)
 library(shinydashboard)
+library(rhandsontable)
 
 source("modules/mod_alphamissense.R")
 source("modules/mod_consurf.R")
@@ -121,13 +122,32 @@ server <- function(input, output, session) {
     content <- list()
     
     if(has_seq){
+      domain_row <- fluidRow(
+        column(6,
+               h4("Domains from UniProt"),
+               tableOutput("domain_table")
+        )
+      )
+      
+      if (isTRUE(bi_res$use_custom_domain())) {
+        domain_row <- fluidRow(
+          column(6,
+                 h4("Domains from UniProt"),
+                 tableOutput("domain_table")
+          ),
+          column(6,
+                 h4("Your Custom Domains"),
+                 tableOutput("custom_domain_table_view")
+          )
+        )
+      }
+      
       content <- c(content, list(
         h4("Protein Info"),
         verbatimTextOutput("info"),
         h4("Sequence"),
         verbatimTextOutput("sequence"),
-        h4("Domains"),
-        tableOutput("domain_table")
+        domain_row
       ))
     }
     
@@ -274,6 +294,16 @@ server <- function(input, output, session) {
     }
   })
   
+  output$custom_domain_table_view <- renderTable({
+    if (!isTRUE(bi_res$use_custom_domain())) return(NULL)
+    df <- bi_res$custom_domain_df()
+    if (!is.null(df) && nrow(df) > 0) {
+      df
+    } else {
+      NULL
+    }
+  })
+  
   output$gnomad_summary <- gnomad_res$summary_ui
   output$gnomad_table <- gnomad_res$table_ui
   
@@ -283,6 +313,7 @@ server <- function(input, output, session) {
       seq_val         = bi_res$current_sequence(),
       protein_data    = if (bi_res$seq_source() == "api") bi_res$protein_data() else NULL,
       missense_df     = missense_df(),
+      domain_df       = bi_res$domain_df(),
       ptm_df          = ptm_res$ptm_df(),
       ptm_show        = ptm_res$show(),
       ptm_types       = ptm_res$selected_types(),

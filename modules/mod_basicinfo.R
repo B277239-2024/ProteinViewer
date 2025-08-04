@@ -12,21 +12,35 @@ mod_basicinfo_ui <- function(id) {
     ),
     conditionalPanel(
       condition = sprintf("input['%s'] == 'upload'", ns("seq_source")),
-      fileInput(ns("fasta_upload"), "Upload FASTA File", accept = c(".fasta", ".fa"),
-                placeholder = "Upload a FASTA file")
-    ),
-    conditionalPanel(
-      condition = sprintf("input['%s'] == 'upload'", ns("seq_source")),
-      fileInput(ns("gnomad_upload"), "Upload gnomAD-like CSV",
-                accept = c(".csv"),
-                placeholder = "Optional variant CSV with HGVSp column"),
-      helpText("Optional. Must contain HGVSp column like 'p.Arg12Cys'.")
+      tagList(
+        fileInput(ns("fasta_upload"), "Upload FASTA File", accept = c(".fasta", ".fa"),
+                  placeholder = "Upload a FASTA file"),
+        
+        fileInput(ns("gnomad_upload"), "Upload gnomAD-like CSV",
+                  accept = c(".csv"),
+                  placeholder = "Optional variant CSV with HGVSp column"),
+        helpText("Must contain HGVSp column like 'p.Arg12Cys'.")
+      )
     ),
     actionButton(ns("fetch"), "Fetch info"),
     tags$div(style = "margin-top: 10px;"), 
     conditionalPanel(
       condition = sprintf("input['%s'] == 'api'", ns("seq_source")),
       selectInput(ns("selected_transcript"), "Select Transcript", choices = NULL)
+    ),
+    tags$hr(),
+    checkboxInput(ns("use_custom_domain"), "Use your own domain info", value = FALSE),
+    
+    conditionalPanel(
+      condition = sprintf("input['%s'] == true", ns("use_custom_domain")),
+      tagList(
+        rhandsontable::rHandsontableOutput(ns("custom_domain_table")),
+        fluidRow(
+          column(6, actionButton(ns("add_row"), "Add Row", icon = icon("plus"))),
+          column(6, actionButton(ns("clear_table"), "Clear Table", icon = icon("trash")))
+        ),
+        helpText("Enter columns: start (numeric), end (numeric), description (text)")
+      )
     )
   )
 }
@@ -36,6 +50,38 @@ mod_basicinfo_server <- function(id) {
     ns <- session$ns
     
     canonical_tx <- reactiveVal(NULL)
+    
+    domain_table_data <- reactiveVal(
+      data.frame(
+        start = as.numeric(c(NA, NA)),
+        end = as.numeric(c(NA, NA)),
+        description = as.character(c("", "")),
+        stringsAsFactors = FALSE
+      )
+    )
+    
+    observeEvent(input$add_row, {
+      df <- domain_table_data()
+      df <- rbind(df, data.frame(
+        start = NA, end = NA, description = "", stringsAsFactors = FALSE
+      ))
+      domain_table_data(df)
+    })
+    
+    observeEvent(input$clear_table, {
+      domain_table_data(
+        data.frame(
+          start = as.numeric(c(NA, NA)),
+          end = as.numeric(c(NA, NA)),
+          description = as.character(c("", "")),
+          stringsAsFactors = FALSE
+        )
+      )
+    })
+    
+    output$custom_domain_table <- rhandsontable::renderRHandsontable({
+      rhandsontable::rhandsontable(domain_table_data(), rowHeaders = NULL)
+    })
     
     # Fetch UniProt JSON
     protein_data <- eventReactive(input$fetch, {
@@ -107,6 +153,43 @@ mod_basicinfo_server <- function(id) {
                         selected = canonical_tx())
     })
     
+    custom_domain_df <- reactive({
+      if (!isTRUE(input$use_custom_domain)) return(NULL)
+      table <- input$custom_domain_table
+      if (is.null(table)) return(NULL)
+      df <- tryCatch({
+        df <- as.data.frame(rhandsontable::hot_to_r(table))
+        domain_table_data(df)
+        df
+      }, error = function(e) {
+        return(NULL)
+      })
+      if (!all(c("start", "end", "description") %in% colnames(df))) return(NULL)
+      df <- df %>% dplyr::filter(!is.na(start) & !is.na(end) & nzchar(description))
+      return(df)
+    })
+    
+    domain_df <- reactive({
+      custom <- custom_domain_df()
+      if (!is.null(custom) && nrow(custom) > 0) {
+        return(custom)
+      }
+      
+      data <- protein_data()
+      if (!is.null(data$features)) {
+        domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
+        if (length(domains) > 0) {
+          return(data.frame(
+            start = as.integer(sapply(domains, function(x) x$location$start$value)),
+            end   = as.integer(sapply(domains, function(x) x$location$end$value)),
+            description = sapply(domains, function(x) x$description),
+            stringsAsFactors = FALSE
+          ))
+        }
+      }
+      return(NULL)
+    })
+    
     return(list(
       pid = reactive({ input$pid }),
       seq_source = reactive({ input$seq_source }),
@@ -116,7 +199,10 @@ mod_basicinfo_server <- function(id) {
       canonical_tx = canonical_tx,
       protein_data = protein_data,
       current_sequence = current_sequence,
-      transcript_table = transcript_table
+      transcript_table = transcript_table,
+      use_custom_domain = reactive({ input$use_custom_domain }),
+      custom_domain_df = custom_domain_df,
+      domain_df = domain_df
     ))
   })
 }
