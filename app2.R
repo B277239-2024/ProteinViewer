@@ -29,72 +29,156 @@ source("R/render_1d_plot.R")
 
 # Define UI for application
 ui <- dashboardPage(
-  dashboardHeader(title = "Protein Info Viewer"),
+  dashboardHeader(title = "Protein Viewer"),
+  
   dashboardSidebar(
     sidebarMenu(id = "main_tabs",
-                menuItem("Basic Info",     tabName = "tab_basic",     icon = icon("info-circle")),
-                menuItem("1D Plot",        tabName = "tab_1dplot",    icon = icon("chart-line")),
-                menuItem("3D Structure",   tabName = "tab_3d",        icon = icon("cube"))
-    ),
-    
-    # Basic Info Inputs
-    conditionalPanel("input.main_tabs == 'tab_basic'",
-                     mod_basicinfo_ui("bi")
-    ),
-    
-    # 1D Plot Inputs
-    conditionalPanel("input.main_tabs == 'tab_1dplot'",
-                     mod_ptm_ui("ptm1"),
-                     mod_consurf_1d_ui("consurf1"),
-                     tags$div(style = "margin-top: 15px;", uiOutput("fells_button")),
-                     tags$hr(),
-                     h4("AlphaMissense"),
-                     mod_alphamissense_ui("am1")
-    ),
-    
-    # 3D Structure Inputs
-    conditionalPanel("input.main_tabs == 'tab_3d'",
-                     selectInput("structure_source", "Choose Structure Source",
-                                 choices = c("AlphaFold", "PDB", "Upload"),
-                                 selected = "AlphaFold"),
-                     conditionalPanel(
-                       condition = "input.structure_source == 'Upload'",
-                       fileInput("pdb_upload", "Upload PDB File", accept = c(".pdb"))
-                     ),
-                     uiOutput("pdb_selector"),
-                     selectInput("set_style", "Choose Structure Style",
-                                 choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
-                                 selected = "Cartoon"),
-                     checkboxInput("spin", "Spin Structure", value = FALSE),
-                     checkboxInput("surface", "Show Surface", value = FALSE),
-                     checkboxInput("labels", "Show Mutation Labels", value = FALSE),
-                     fileInput("consurf_pdb_upload", "Upload ConSurf PDB", accept = ".pdb"),
-                     checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE), 
-                     
-                     numericInput("first", "First Residue", value = 1, min = 1),
-                     numericInput("last", "Last Residue", value = NULL, min = 1),
-                     actionButton("selectSpheres", "Highlight Variants with Spheres"),
-                     tags$hr(),
-                     sliderInput(
-                       inputId = "set_slab",
-                       label = "Set slab viewing depth",
-                       min = -150,
-                       max = 150,
-                       value = c(-150, 150),
-                       step = 10,
-                       dragRange = TRUE,
-                       animate = TRUE
-                     ),
-                     helpText("Adjust to clip front/back layers of the structure")
+                menuItem("Basic Info", icon = icon("info-circle"), startExpanded = TRUE,
+                         menuSubItem("Protein Info", tabName = "tab_protein"),
+                         menuSubItem("GnomAD Info", tabName = "tab_gnomad")
+                ),
+                
+                menuItem("1D Plot", icon = icon("chart-bar"), startExpanded = TRUE,
+                         menuSubItem("1D Plot", tabName = "tab_1d"),
+                         menuSubItem("ConSurf Plot", tabName = "tab_consurf"),
+                         menuSubItem("AlphaMissense Heatmap", tabName = "tab_am"),
+                         menuSubItem("FELLS Plot", tabName = "tab_fells")
+                ),
+                
+                menuItem("3D Structure", tabName = "tab_3d", icon = icon("cube"))
     )
   ),
   
   dashboardBody(
     useShinyjs(),
+    
     tabItems(
-      tabItem(tabName = "tab_basic",  uiOutput("tab_basic")),
-      tabItem(tabName = "tab_1dplot", uiOutput("tab_1dplot")),
-      tabItem(tabName = "tab_3d",     uiOutput("tab_3d"))
+      tabItem(tabName = "tab_protein",
+              fluidRow(
+                column(4, mod_basicinfo_ui("bi")),
+                column(8,
+                       h4("Protein Info"),
+                       verbatimTextOutput("info"),
+                       h4("Sequence"),
+                       verbatimTextOutput("sequence"),
+                       h4("Domains from UniProt"),
+                       tableOutput("domain_table"),
+                       h4("Your Custom Domains"),
+                       tableOutput("custom_domain_table_view")
+                )
+              )
+      ),
+      
+      tabItem(tabName = "tab_gnomad",
+              fluidRow(
+                column(12,
+                       h4("GnomAD Summary"),
+                       uiOutput("gnomad_summary"),
+                       h4("GnomAD Variant Table"),
+                       DT::dataTableOutput("gnomad_table")
+                )
+              )
+      ),
+      
+      tabItem(tabName = "tab_1d",
+              fluidRow(
+                column(4,
+                       mod_ptm_ui("ptm1"),
+                       sliderInput("vdvp_window", "Window Size", min = 0.01, max = 100, value = 3, step = 0.5),
+                       helpText("Window size < 1 == fraction of the protein length")
+                ),
+                column(8,
+                       h4("Variant 1D Plot"),
+                       plotlyOutput("variant_1dplot", height="600px"),
+                )
+              )
+      ),
+      
+      tabItem(tabName = "tab_consurf",
+              fluidRow(
+                column(4,
+                       mod_consurf_1d_ui("consurf1")
+                ),
+                column(8,
+                       h4("ConSurf Conservation Scores"),
+                       uiOutput("consurf_plot_ui")
+                )
+              )
+      ),
+      
+      tabItem(tabName = "tab_am",
+              fluidRow(
+                column(4,
+                       mod_alphamissense_ui("am1")
+                ),
+                column(8,
+                       h4("AlphaMissense Heatmap"),
+                       plotlyOutput("alphamissense_heatmap", height = "500px")
+                )
+              )
+      ),
+      
+      tabItem(tabName = "tab_fells",
+              fluidRow(
+                column(4,
+                       uiOutput("fells_button") 
+                ),
+                column(8,
+                       h4("FELLS Secondary Structure"),
+                       plotOutput("fells_plot", height = "500px")
+                )
+              )
+      ),
+      
+      tabItem(tabName = "tab_3d",
+              fluidRow(
+                column(4,
+                       h4("Structure Controls"),
+                       selectInput("structure_source", "Choose Structure Source",
+                                   choices = c("AlphaFold", "PDB", "Upload"),
+                                   selected = "AlphaFold"),
+                       conditionalPanel(
+                         condition = "input.structure_source == 'Upload'",
+                         fileInput("pdb_upload", "Upload PDB File", accept = ".pdb")
+                       ),
+                       uiOutput("pdb_selector"),
+                       
+                       selectInput("set_style", "Choose Structure Style",
+                                   choices = c("Cartoon", "Line", "Stick", "Sphere", "Cross"),
+                                   selected = "Cartoon"),
+                       checkboxInput("spin", "Spin Structure", value = FALSE),
+                       checkboxInput("surface", "Show Surface", value = FALSE),
+                       checkboxInput("labels", "Show Mutation Labels", value = FALSE),
+                       
+                       fileInput("consurf_pdb_upload", "Upload ConSurf PDB", accept = ".pdb"),
+                       checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE),
+                       
+                       numericInput("first", "First Residue", value = 1, min = 1),
+                       numericInput("last", "Last Residue", value = NULL, min = 1),
+                       actionButton("selectSpheres", "Highlight Variants with Spheres"),
+                       
+                       sliderInput(
+                         "set_slab",
+                         "Set slab viewing depth",
+                         min = -150, max = 150,
+                         value = c(-150, 150),
+                         step = 10,
+                         dragRange = TRUE,
+                         animate = TRUE
+                       ),
+                       helpText("Adjust to clip front/back layers of the structure")
+                ),
+                
+                column(8,
+                       h4("3D Structure Viewer"),
+                       textOutput("structure_info"),
+                       r3dmolOutput("structure_view", height = "500px"),
+                       downloadButton("download_pdb", "Download PDB File"),
+                       uiOutput("sphere_legend"),
+                       uiOutput("consurf_legend_ui")
+                )
+              )
+      )
     )
   )
 )
@@ -112,80 +196,9 @@ server <- function(input, output, session) {
   )
   gnomad_df <- gnomad_res$gnomad_df
   
-  # Basic Info Tab
-  output$tab_basic <- renderUI({
-    has_seq <- !is.null(bi_res$current_sequence())
-    has_gnomad <- !is.null(gnomad_df()) && nrow(gnomad_df()) > 0
-    ptm_data <- ptm_res$ptm_df()
-    
-    if (!has_seq && !has_gnomad) return(helpText("Please upload a FASTA file or a gnomAD CSV."))
-    content <- list()
-    
-    if(has_seq){
-      domain_row <- fluidRow(
-        column(6,
-               h4("Domains from UniProt"),
-               tableOutput("domain_table")
-        )
-      )
-      
-      if (isTRUE(bi_res$use_custom_domain())) {
-        domain_row <- fluidRow(
-          column(6,
-                 h4("Domains from UniProt"),
-                 tableOutput("domain_table")
-          ),
-          column(6,
-                 h4("Your Custom Domains"),
-                 tableOutput("custom_domain_table_view")
-          )
-        )
-      }
-      
-      content <- c(content, list(
-        h4("Protein Info"),
-        verbatimTextOutput("info"),
-        h4("Sequence"),
-        verbatimTextOutput("sequence"),
-        domain_row
-      ))
-    }
-    
-    if (has_gnomad) {
-      content <- c(content, list(
-        h4("GnomAD Summary"),
-        uiOutput("gnomad_summary"),
-        h4("GnomAD Variant Table"),
-        DT::dataTableOutput("gnomad_table")
-      ))
-    }
-    
-    tagList(content)
-  })
   
-  # 1D Plot Tab
-  output$tab_1dplot <- renderUI({
-    req(bi_res$current_sequence())
-    tagList(
-      numericInput("vdvp_window", "Window size:", value = 3, min = 0.01, step = 0.1),
-      bsTooltip("vdvp_window", 
-                title = "Window size: Integer = fixed length, < 1 = fraction of the protein length", 
-                placement = "right", 
-                trigger = "hover"),
-      plotlyOutput("variant_1dplot", height="600px"),
-      br(),
-      uiOutput("consurf_plot_ui"),
-      br(),
-      conditionalPanel(
-        condition = "output.fellsAvailable == true",
-        h4("FELLS Result"),
-        plotOutput("fells_plot", height = "500px")
-      ),
-      br(),
-      h4("AlphaMissense Pathogenicity Heatmap"),
-      plotlyOutput("alphamissense_heatmap", height = "500px")
-    )
-  })
+  
+  
   
   output$consurf_plot_ui <- renderUI({
     consurf_res$plot_ui
@@ -195,20 +208,6 @@ server <- function(input, output, session) {
     "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
     "5" = "#FFFFFF", "6" = "#FBECF1", "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664"
   )
-  
-  # 3D Structure Tab
-  output$tab_3d <- renderUI({
-    req(input$structure_source)
-    tagList(
-      textOutput("structure_info"),
-      withSpinner(r3dmolOutput("structure_view", height = "500px")),
-      br(),
-      uiOutput("sphere_legend"),
-      uiOutput("consurf_legend_ui"), 
-      br(),
-      downloadButton("download_pdb", "Download PDB File")
-    )
-  })
   
   gene_name <- reactive({
     tx_df <- bi_res$transcript_table()
@@ -298,6 +297,7 @@ server <- function(input, output, session) {
     if (!isTRUE(bi_res$use_custom_domain())) return(NULL)
     df <- bi_res$custom_domain_df()
     if (!is.null(df) && nrow(df) > 0) {
+      colnames(df) <- c("Description", "Start", "End")
       df
     } else {
       NULL

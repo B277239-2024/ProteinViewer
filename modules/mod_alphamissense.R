@@ -5,7 +5,7 @@ mod_alphamissense_ui <- function(id) {
   tagList(
     radioButtons(ns("am_source"), "AlphaMissense Source",
                  choices = c("API" = "api", "Upload File" = "upload"),
-                 selected = character(0), inline = TRUE),
+                 selected = "upload", inline = TRUE),
     conditionalPanel(
       condition = sprintf("input['%s'] == 'upload'", ns("am_source")),
       fileInput(ns("alphamissense_upload"), "Upload AlphaMissense CSV", accept = ".csv")

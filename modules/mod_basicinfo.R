@@ -39,7 +39,7 @@ mod_basicinfo_ui <- function(id) {
           column(6, actionButton(ns("add_row"), "Add Row", icon = icon("plus"))),
           column(6, actionButton(ns("clear_table"), "Clear Table", icon = icon("trash")))
         ),
-        helpText("Enter columns: start (numeric), end (numeric), description (text)")
+        helpText("Enter columns: Description (text), Start (integer), End (integer)")
       )
     )
   )
@@ -53,9 +53,9 @@ mod_basicinfo_server <- function(id) {
     
     domain_table_data <- reactiveVal(
       data.frame(
-        start = as.numeric(c(NA, NA)),
-        end = as.numeric(c(NA, NA)),
         description = as.character(c("", "")),
+        start = as.integer(c(NA, NA)),
+        end = as.integer(c(NA, NA)),
         stringsAsFactors = FALSE
       )
     )
@@ -63,7 +63,7 @@ mod_basicinfo_server <- function(id) {
     observeEvent(input$add_row, {
       df <- domain_table_data()
       df <- rbind(df, data.frame(
-        start = NA, end = NA, description = "", stringsAsFactors = FALSE
+        description = "", start = NA, end = NA, stringsAsFactors = FALSE
       ))
       domain_table_data(df)
     })
@@ -71,15 +71,16 @@ mod_basicinfo_server <- function(id) {
     observeEvent(input$clear_table, {
       domain_table_data(
         data.frame(
-          start = as.numeric(c(NA, NA)),
-          end = as.numeric(c(NA, NA)),
           description = as.character(c("", "")),
+          start = as.integer(c(NA, NA)),
+          end = as.integer(c(NA, NA)),
           stringsAsFactors = FALSE
         )
       )
     })
     
     output$custom_domain_table <- rhandsontable::renderRHandsontable({
+      req(input$use_custom_domain)
       rhandsontable::rhandsontable(domain_table_data(), rowHeaders = NULL)
     })
     
@@ -164,7 +165,7 @@ mod_basicinfo_server <- function(id) {
       }, error = function(e) {
         return(NULL)
       })
-      if (!all(c("start", "end", "description") %in% colnames(df))) return(NULL)
+      if (!all(c("description", "start", "end") %in% colnames(df))) return(NULL)
       df <- df %>% dplyr::filter(!is.na(start) & !is.na(end) & nzchar(description))
       return(df)
     })
@@ -175,16 +176,18 @@ mod_basicinfo_server <- function(id) {
         return(custom)
       }
       
-      data <- protein_data()
-      if (!is.null(data$features)) {
-        domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
-        if (length(domains) > 0) {
-          return(data.frame(
-            start = as.integer(sapply(domains, function(x) x$location$start$value)),
-            end   = as.integer(sapply(domains, function(x) x$location$end$value)),
-            description = sapply(domains, function(x) x$description),
-            stringsAsFactors = FALSE
-          ))
+      if (input$seq_source == "api") {
+        data <- protein_data()
+        if (!is.null(data$features)) {
+          domains <- data$features[sapply(data$features, function(x) x$type == "Domain")]
+          if (length(domains) > 0) {
+            return(data.frame(
+              start = as.integer(sapply(domains, function(x) x$location$start$value)),
+              end   = as.integer(sapply(domains, function(x) x$location$end$value)),
+              description = sapply(domains, function(x) x$description),
+              stringsAsFactors = FALSE
+            ))
+          }
         }
       }
       return(NULL)
