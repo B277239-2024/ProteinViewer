@@ -11,7 +11,9 @@ render_1d_plot <- function(
     am_df = NULL,
     am_enabled = FALSE,
     vdvp_window = 3,
-    gene_name = NULL
+    gene_name = NULL,
+    fells_enabled = FALSE,
+    fells_result = NULL
 ) {
   consurf_colors <- c(
     "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
@@ -108,6 +110,47 @@ render_1d_plot <- function(
     ) +
     ggplot2::labs(x = NULL)
   
+  # FELLS subplots
+  p3 <- p4 <- NULL
+  if (fells_enabled && !is.null(fells_result)) {
+    # Secondary structure
+    hsc <- fells_result$p_h |> unlist()
+    est <- fells_result$p_e |> unlist()
+    coil <- fells_result$p_c |> unlist()
+    df3 <- data.frame(index = 1:length(hsc),
+                      Helix = hsc,
+                      Strand = est,
+                      Coil = coil) |>
+      tidyr::pivot_longer(cols = c("Helix", "Strand", "Coil")) |>
+      dplyr::mutate(
+        value = as.numeric(value),
+        value = dplyr::if_else(name == "Coil", -value, value))
+    
+    p3 <- ggplot2::ggplot(df3, aes(x = index, y = value, fill = name)) +
+      ggplot2::geom_col(alpha = 0.8) +
+      ggplot2::scale_fill_manual(values = c("Helix" = "#91288c", "Strand" = "#ffa500", "Coil" = "gray50")) +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(axis.title.x = element_blank()) +
+      ggplot2::ggtitle("Secondary Structure Prediction")
+    
+    # Disorder / HCA
+    dis <- fells_result$p_dis |> unlist()
+    hca <- fells_result$hca |> unlist()
+    df4 <- data.frame(index = 1:length(dis),
+                      Disorder = dis,
+                      HCA = hca) |>
+      tidyr::pivot_longer(cols = c("Disorder", "HCA")) |>
+      dplyr::mutate(
+        value = as.numeric(value),
+        value = dplyr::if_else(name == "Disorder", -value, value))
+    
+    p4 <- ggplot2::ggplot(df4, aes(x = index, y = value, fill = name)) +
+      ggplot2::geom_col(alpha = 0.8) +
+      ggplot2::scale_fill_manual(values = c("Disorder" = "red", "HCA" = "black")) +
+      ggplot2::theme_minimal() +
+      ggplot2::ggtitle("Disorder & HCA")
+  }
+  
   mut_index <- missense_df$AA_Position |> unique()
   prot_len <- nchar(seq_val)
   window <- if (vdvp_window < 1) max(1, floor(prot_len * vdvp_window)) else as.integer(vdvp_window)
@@ -126,6 +169,36 @@ render_1d_plot <- function(
     ggplot2::labs(x = "Residue", y = "Vd/Vp") +
     ggplot2::theme(plot.title = ggplot2::element_blank())
   
+  p1_plot <- plotly::ggplotly(p1, tooltip = "text") %>%
+    plotly::layout(margin = list(b = 0))
+  
+  p2_plot <- plotly::ggplotly(p2) %>%
+    plotly::layout(margin = list(t = 0))
+  
+  p3_plot <- if (!is.null(p3)) {
+    plotly::ggplotly(p3) %>% plotly::layout(margin = list(t = 0))
+  } else NULL
+  
+  p4_plot <- if (!is.null(p4)) {
+    plotly::ggplotly(p4) %>% plotly::layout(margin = list(t = 0))
+  } else NULL
+  
+  plots <- list(p1_plot)
+  if (!is.null(p3_plot)) plots <- append(plots, list(p3_plot))
+  if (!is.null(p4_plot)) plots <- append(plots, list(p4_plot))
+  plots <- append(plots, list(p2_plot))
+  
+  has_p3 <- !is.null(p3_plot)
+  has_p4 <- !is.null(p4_plot)
+  
+  subplot_heights <- c(2)
+  
+  if (has_p3) subplot_heights <- c(subplot_heights, 1)
+  if (has_p4) subplot_heights <- c(subplot_heights, 1)
+  
+  subplot_heights <- c(subplot_heights, 1)
+  subplot_heights <- subplot_heights / sum(subplot_heights)
+  
   title_text <- if (!is.null(protein_data)) {
     paste0("Protein: ", protein_data$proteinDescription$recommendedName$fullName$value,
            "; Gene: ", gene_name)
@@ -133,14 +206,13 @@ render_1d_plot <- function(
     "User uploaded sequence"
   }
   
-  has_extra_layer <- consurf_enabled || am_enabled
-  subplot_heights <- if (has_extra_layer) c(0.7, 0.3) else c(0.5, 0.5)
-  
-  plotly::subplot(
-    plotly::ggplotly(p1, tooltip = "text") %>% plotly::layout(margin = list(b = 0)),
-    plotly::ggplotly(p2) %>% plotly::layout(margin = list(t = 0)),
-    nrows = 2, shareX = TRUE, titleY = TRUE, heights = subplot_heights
-  ) %>%
-    plotly::layout(title = list(text = title_text, x = 0, xanchor = "left"),
-                   margin = list(t = 60))
+  plotly::subplot(plots,
+                  nrows = length(plots),
+                  shareX = TRUE,
+                  titleY = TRUE,
+                  heights = subplot_heights) %>%
+    plotly::layout(
+      title = list(text = title_text, x = 0, xanchor = "left"),
+      margin = list(t = 60)
+    )
 }

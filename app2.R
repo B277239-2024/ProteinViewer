@@ -121,7 +121,8 @@ ui <- dashboardPage(
       tabItem(tabName = "tab_fells",
               fluidRow(
                 column(4,
-                       uiOutput("fells_button") 
+                       uiOutput("fells_button"),
+                       checkboxInput("add_fells_1d", "Add FELLS layout to 1D Plot", value = FALSE)
                 ),
                 column(8,
                        h4("FELLS Secondary Structure"),
@@ -322,7 +323,9 @@ server <- function(input, output, session) {
       am_df           = am_res$alphamissense_df(),
       am_enabled      = am_res$enabled(),
       vdvp_window     = input$vdvp_window,
-      gene_name       = gene_name()
+      gene_name       = gene_name(),
+      fells_enabled   = fells_enabled(),
+      fells_result    = fells_result()
     )
   })
   
@@ -912,6 +915,7 @@ server <- function(input, output, session) {
   
   fells_job <- reactiveVal()
   fells_result <- reactiveVal()
+  fells_enabled <- reactiveVal(FALSE)
   fells_class <- reactiveVal("btn-primary")
   
   output$fells_button <- renderUI({
@@ -1012,6 +1016,14 @@ server <- function(input, output, session) {
              alphag = cut(alpha, breaks = 5))
     
     df
+  })
+  
+  observeEvent(input$add_fells_1d, {
+    if (isTRUE(input$add_fells_1d) && fells_class() == "btn-success") {
+      fells_enabled(TRUE)
+    } else {
+      fells_enabled(FALSE)
+    }
   })
   
   output$fells_plot <- renderPlot({
