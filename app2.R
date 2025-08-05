@@ -59,9 +59,9 @@ ui <- dashboardPage(
                 column(4, mod_basicinfo_ui("bi")),
                 column(8,
                        h4("Protein Info"),
-                       verbatimTextOutput("info"),
+                       tableOutput("info"),
                        h4("Sequence"),
-                       verbatimTextOutput("sequence"),
+                       uiOutput("sequence"),
                        h4("Domains from UniProt"),
                        tableOutput("domain_table"),
                        h4("Your Custom Domains"),
@@ -232,52 +232,61 @@ server <- function(input, output, session) {
   })
   
   # Basic info output
-  output$info <- renderPrint({
+  output$info <- renderTable({
     if (bi_res$seq_source() == "upload") {
       seq <- bi_res$current_sequence()
       if (!is.null(seq)) {
-        list(
-          Protein_Name = "User uploaded sequence",
-          Length = nchar(seq),
-          Gene = "N/A",
-          Organism = "N/A"
+        data.frame(
+          Field = c("Protein Name", "Length", "Gene", "Organism"),
+          Value = c("User uploaded sequence", nchar(seq), "N/A", "N/A"),
+          stringsAsFactors = FALSE
         )
       } else {
-        "No sequence available."
+        data.frame(Field = "Message", Value = "No sequence available.")
       }
     } else {
       data <- bi_res$protein_data()
       if (!is.null(data)){
-        list(
-          ID = data$primaryAccession,
-          Protein_Name = data$proteinDescription$recommendedName$fullName$value,
-          Gene = paste(sapply(data$genes, function(g) g$geneName$value), collapse = "; "),
-          Organism = data$organism$scientificName,
-          Length = data$sequence$length
+        data.frame(
+          Field = c("ID", "Protein Name", "Gene", "Organism", "Length"),
+          Value = c(
+            data$primaryAccession,
+            data$proteinDescription$recommendedName$fullName$value,
+            paste(sapply(data$genes, function(g) g$geneName$value), collapse = "; "),
+            data$organism$scientificName,
+            data$sequence$length
+          ),
+          stringsAsFactors = FALSE
         )
       } else {
-        "Failed to fetch, please check the UniProt ID"
+        data.frame(Field = "Message", Value = "Failed to fetch, please check the UniProt ID")
       }
     }
   })
   
   # Protein sequence output
-  output$sequence <- renderText({
-    if (bi_res$seq_source() == "upload") {
-      seq <- bi_res$current_sequence()
-      if (!is.null(seq)) {
-        return(seq)
-      } else {
-        return("Failed to load uploaded sequence.")
-      }
+  output$sequence <- renderUI({
+    seq <- if (bi_res$seq_source() == "upload") {
+      bi_res$current_sequence()
+    } else {
+      data <- bi_res$protein_data()
+      if (!is.null(data)) data$sequence$value else NULL
     }
     
-    data <- bi_res$protein_data()
-    if (!is.null(data)){
-      data$sequence$value
-    } else {
-      "Failed to fetch, please check the UniProt ID"
+    if (is.null(seq)) {
+      return("Failed to load sequence.")
     }
+    
+    line_width <- 60
+    line_starts <- seq(1, nchar(seq), by = line_width)
+    seq_lines <- substring(seq, line_starts, line_starts + line_width - 1)
+    seq_lines <- sprintf("%03d  %s", line_starts, seq_lines)
+    formatted <- paste(seq_lines, collapse = "\n")
+    print(formatted)
+    tags$pre(
+      style = "font-family: Courier, monospace; font-size: 13px; white-space: pre-wrap; word-break: break-word;
+    max-width: 550px; background-color: #f8f8f8; padding: 10px; border-radius: 4px; overflow-x: auto;", HTML(formatted)
+    )
   })
   
   # Domain info table output
