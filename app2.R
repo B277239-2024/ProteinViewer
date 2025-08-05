@@ -85,7 +85,10 @@ ui <- dashboardPage(
                 column(4,
                        mod_ptm_ui("ptm1"),
                        sliderInput("vdvp_window", "Window Size", min = 0.01, max = 100, value = 3, step = 0.5),
-                       helpText("Window size < 1 == fraction of the protein length")
+                       helpText("Window size < 1 == fraction of the protein length"),
+                       
+                       br(),
+                       uiOutput("plot_legend")
                 ),
                 column(8,
                        h4("Variant 1D Plot"),
@@ -326,6 +329,106 @@ server <- function(input, output, session) {
       gene_name       = gene_name(),
       fells_enabled   = fells_enabled(),
       fells_result    = fells_result()
+    )
+  })
+  
+  output$plot_legend <- renderUI({
+    tagList(
+      tags$div(style = "padding: 10px; font-size: 13px;",
+               tags$h5("Legend"),
+               tags$ul(style = "list-style-type: none; padding-left: 0; margin-bottom: 0;",
+                       
+                       # Missense variants
+                       tags$li(
+                         tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                               background-color: slateblue; margin-right: 6px;"),
+                         "Blue line – Missense variants"
+                       ),
+                       
+                       # Protein bar
+                       tags$li(
+                         tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                               background-color: #d3d3d3; border: 1px solid #ccc;
+                               margin-right: 6px;"),
+                         "Grey bar – Protein length"
+                       ),
+                       
+                       # Domain
+                       tags$li(
+                         tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                               background-color: #fca6a6; border: 1px solid #ccc;
+                               margin-right: 6px;"),
+                         "Pink bar – Domains"
+                       ),
+                       
+                       # AlphaMissense
+                       if (am_res$enabled()) {
+                         tags$li(
+                           tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                                 background-color: darkgreen; margin-right: 6px;"),
+                           "Green bars – AlphaMissense average pathogenicity score"
+                         )
+                       },
+                       
+                       # ConSurf
+                       if (consurf_res$enabled()) {
+                         tagList(
+                           tags$li("Colored lines – ConSurf conservation grade:"),
+                           tags$div(style = "display: flex; flex-wrap: wrap; gap: 4px; padding-top: 4px;",
+                                    lapply(1:9, function(g) {
+                                      color <- c(
+                                        "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE",
+                                        "4" = "#EAFFFF", "5" = "#FFFFFF", "6" = "#FBECF1",
+                                        "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664"
+                                      )[as.character(g)]
+                                      tags$div(
+                                        tags$div(g,
+                                                 style = paste0(
+                                                   "width: 20px; height: 20px; background-color:", color, ";",
+                                                   "text-align: center; line-height: 20px; font-size: 12px; border: 1px solid #999;"
+                                                 )
+                                        )
+                                      )
+                                    })
+                           )
+                         )
+                       },
+                       
+                       # FELLS
+                       if (fells_enabled()) {
+                         tagList(
+                           tags$li("FELLS features:"),
+                           tags$ul(style = "list-style-type: none; padding-left: 12px;",
+                                   tags$li(
+                                     tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                                     background-color: #91288c; margin-right: 6px;"),
+                                     "Helix"
+                                   ),
+                                   tags$li(
+                                     tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                                     background-color: #ffa500; margin-right: 6px;"),
+                                     "Strand"
+                                   ),
+                                   tags$li(
+                                     tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                                     background-color: gray; margin-right: 6px;"),
+                                     "Coil"
+                                   ),
+                                   tags$li(
+                                     tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                                     background-color: red; margin-right: 6px;"),
+                                     "Disorder (negative)"
+                                   ),
+                                   tags$li(
+                                     tags$span(style = "display: inline-block; width: 12px; height: 12px;
+                                     background-color: black; margin-right: 6px;"),
+                                     "HCA"
+                                   )
+                           )
+                         )
+                       }
+               )
+      )
     )
   })
   

@@ -27,7 +27,7 @@ render_1d_plot <- function(
   p1 <- ggplot2::ggplot() +
     ggplot2::geom_rect(data = protein_len_df, 
                        aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax, text = label), 
-                       fill = "grey90")
+                       fill = "#d3d3d3")
   
   if (!is.null(domain_df) && nrow(domain_df) > 0){
     p1 <- p1 +
@@ -75,8 +75,8 @@ render_1d_plot <- function(
     p1 <- p1 + 
       ggplot2::geom_linerange(data = consurf_data,
                               mapping = aes(x = Position, ymin = 0.3, ymax = 0.4, 
-                                            text = paste0("ConSurf\\n", "Position: ", Position, "\\n",
-                                                          "Score: ", round(Score, 3), "\\n", "Grade: ", Grade)),
+                                            text = paste0("ConSurf\n", "Position: ", Position, "\n",
+                                                          "Score: ", round(Score, 3), "\n", "Grade: ", Grade)),
                               inherit.aes = FALSE,
                               color = consurf_data$Color,
                               size = 1.0, alpha = 0.9)
@@ -93,7 +93,7 @@ render_1d_plot <- function(
         aes(x = position,
             ymin = 0.15,
             ymax = avg_score * 0.1 + 0.15,
-            text = paste0("AlphaMissense\\nPosition: ", position, "\\nAvg Score: ", round(avg_score, 3))
+            text = paste0("AlphaMissense\nPosition: ", position, "\nAvg Score: ", round(avg_score, 3))
         ),
         color = "darkgreen",
         size = 1.0,
