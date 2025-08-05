@@ -3,8 +3,6 @@
 mod_gnomad_server <- function(id, seq_source, selected_transcript, gnomad_upload) {
   moduleServer(id, function(input, output, session) {
     
-    # --- 数据获取逻辑 ---
-    
     fetch_gnomad_by_transcript <- function(transcript_id) {
       url <- "https://gnomad.broadinstitute.org/api"
       query <- '

@@ -12,7 +12,7 @@ mod_ptm_server <- function(id, protein_data) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    # 提取 PTM 信息
+    # extract PTM info
     get_ptm_info <- function(protein_json) {
       if (is.null(protein_json$features)) return(NULL)
       ptm_features <- protein_json$features[sapply(protein_json$features, function(x) x$type == "Modified residue")]
