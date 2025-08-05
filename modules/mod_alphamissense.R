@@ -10,11 +10,14 @@ mod_alphamissense_ui <- function(id) {
       condition = sprintf("input['%s'] == 'upload'", ns("am_source")),
       fileInput(ns("alphamissense_upload"), "Upload AlphaMissense CSV", accept = ".csv")
     ),
-    actionButton(ns("add_alphamissense"), "Add AlphaMissense Layer", icon = icon("plus")),
+    checkboxInput(ns("add_alphamissense"), "Add AlphaMissense Layer to 1D plot", value = FALSE),
     checkboxGroupInput(ns("am_prediction_filter"), "Prediction Category",
                        choices = c("likely_benign", "ambiguous", "likely_pathogenic"),
                        selected = NULL),
-    helpText("Choose prediction types to display on heatmap.")
+    helpText("Choose prediction types to display on heatmap."),
+    uiOutput(ns("download_ui")),
+    br(),
+    uiOutput(ns("download_data_ui"))
   )
 }
 
@@ -22,17 +25,24 @@ mod_alphamissense_server <- function(id, pid) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    alphamissense_enabled <- reactiveVal(FALSE)
-    
-    observe({
-      df <- tryCatch(alphamissense_df(), error = function(e) NULL)
-      ready <- !is.null(df) && nrow(df) > 0
-      shinyjs::toggleState("add_alphamissense", condition = ready)
+    output$download_ui <- renderUI({
+      df <- alphamissense_df()
+      if (!is.null(df) && nrow(df) > 0) {
+        downloadButton(ns("download_am_heatmap"), "Download Heatmap (PNG)", icon = icon("download"))
+      } else {
+        return(NULL)
+      }
     })
     
-    observeEvent(input$add_alphamissense, {
-      req(alphamissense_df())  
-      alphamissense_enabled(TRUE)
+    output$download_data_ui <- renderUI({
+      is_api <- input$am_source == "api"
+      df <- alphamissense_df()
+      
+      if (is_api && !is.null(df) && nrow(df) > 0) {
+        downloadButton(ns("download_am_data"), "Download AlphaMissense CSV", icon = icon("file-download"))
+      } else {
+        return(NULL)
+      }
     })
     
     fetch_alphafold_am_url <- function(uniprot_id) {
@@ -91,6 +101,80 @@ mod_alphamissense_server <- function(id, pid) {
       
       df
     })
+    
+    alphamissense_enabled <- reactive({
+      input$add_alphamissense && !is.null(alphamissense_df()) && nrow(alphamissense_df()) > 0
+    })
+    
+    output$download_am_heatmap <- downloadHandler(
+      filename = function() {
+        paste0("alphamissense_heatmap_", Sys.Date(), ".png")
+      },
+      content = function(file) {
+        req(am_res$alphamissense_df())
+        df <- alphamissense_df()
+        
+        filter_vals <- input$am_prediction_filter
+        
+        if (is.null(filter_vals) || length(filter_vals) == 0) {
+          filter_vals <- unique(df$am_class)
+        }
+        
+        df <- df[df$am_class %in% filter_vals, ]
+        req(nrow(df) > 0)
+        
+        ref_df <- df %>%
+          dplyr::select(position, aa_from) %>%
+          dplyr::distinct() %>%
+          dplyr::mutate(aa_from = factor(aa_from, levels = levels(df$aa_to)))
+        
+        p <- ggplot() +
+          geom_tile(
+            data = df,
+            aes(x = position, y = aa_to, fill = score),
+            color = NA
+          ) +
+          geom_tile(
+            data = ref_df,
+            aes(x = position, y = aa_from),
+            fill = "black", width = 1, height = 1, alpha = 0.9
+          ) +
+          scale_fill_gradientn(
+            colors = c("blue", "white", "red"),
+            values = scales::rescale(c(0, 0.5, 1)),
+            limits = c(0, 1),
+            name = "Score"
+          ) +
+          labs(
+            title = "AlphaMissense Heatmap",
+            x = "Residue Position",
+            y = "Alternative Amino Acid"
+          ) +
+          theme_minimal() +
+          theme(
+            axis.text.x = element_text(size = 7),
+            axis.text.y = element_text(size = 8),
+            panel.grid = element_blank()
+          )
+        
+        ggsave(file, plot = p, width = 12, height = 6, dpi = 300, bg = "white")
+      }
+    )
+    
+    output$download_am_data <- downloadHandler(
+      filename = function() {
+        paste0("AlphaMissense_API_", Sys.Date(), ".csv")
+      },
+      content = function(file) {
+        df <- alphamissense_df()
+        if (is.null(df) || nrow(df) == 0) {
+          showNotification("No AlphaMissense API data to download.", type = "error")
+          return(NULL)
+        }
+        
+        readr::write_csv(df, file)
+      }
+    )
     
     return(list(
       alphamissense_df = alphamissense_df,

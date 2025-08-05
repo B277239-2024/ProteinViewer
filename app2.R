@@ -93,6 +93,7 @@ ui <- dashboardPage(
                 column(8,
                        h4("Variant 1D Plot"),
                        plotlyOutput("variant_1dplot", height="600px"),
+                       downloadButton("download_1dplot", "Download 1D Plot (PNG)", icon = icon("download"))
                 )
               )
       ),
@@ -125,7 +126,8 @@ ui <- dashboardPage(
               fluidRow(
                 column(4,
                        uiOutput("fells_button"),
-                       checkboxInput("add_fells_1d", "Add FELLS layout to 1D Plot", value = FALSE)
+                       checkboxInput("add_fells_1d", "Add FELLS layout to 1D Plot", value = FALSE),
+                       uiOutput("fells_download_ui")
                 ),
                 column(8,
                        h4("FELLS Secondary Structure"),
@@ -328,7 +330,8 @@ server <- function(input, output, session) {
       vdvp_window     = input$vdvp_window,
       gene_name       = gene_name(),
       fells_enabled   = fells_enabled(),
-      fells_result    = fells_result()
+      fells_result    = fells_result(),
+      return_plot_only = FALSE
     )
   })
   
@@ -431,6 +434,34 @@ server <- function(input, output, session) {
       )
     )
   })
+  
+  output$download_1dplot <- downloadHandler(
+    filename = function() {
+      paste0("1D_plot_", bi_res$pid(), ".png")
+    },
+    content = function(file) {
+      p <- render_1d_plot(
+        seq_val         = bi_res$current_sequence(),
+        protein_data    = if (bi_res$seq_source() == "api") bi_res$protein_data() else NULL,
+        missense_df     = missense_df(),
+        domain_df       = bi_res$domain_df(),
+        ptm_df          = ptm_res$ptm_df(),
+        ptm_show        = ptm_res$show(),
+        ptm_types       = ptm_res$selected_types(),
+        consurf_df      = consurf_res$consurf_df(),
+        consurf_enabled = consurf_res$enabled(),
+        am_df           = am_res$alphamissense_df(),
+        am_enabled      = am_res$enabled(),
+        vdvp_window     = input$vdvp_window,
+        gene_name       = gene_name(),
+        fells_enabled   = fells_enabled(),
+        fells_result    = fells_result(),
+        return_plot_only = TRUE 
+      )
+      
+      ggplot2::ggsave(file, p, width = 12, height = 8, dpi = 300)
+    }
+  )
   
   # Alphamissense Heatmap Plot
   output$alphamissense_heatmap <- renderPlotly({
@@ -1151,6 +1182,68 @@ server <- function(input, output, session) {
     
     patchwork::wrap_plots(p1, p2, ncol = 1)
   })
+  
+  output$fells_download_ui <- renderUI({
+    if (fells_class() == "btn-success" && !is.null(fells_result())) {
+      downloadButton("download_fells_plot", "Download FELLS Plot (PNG)", icon = icon("download"))
+    } else {
+      return(NULL)
+    }
+  })
+  
+  output$download_fells_plot <- downloadHandler(
+    filename = function() {
+      paste0("fells_plot_", Sys.Date(), ".png")
+    },
+    content = function(file) {
+      fr <- fells_result()
+      req(fr)
+      
+      # Secondary structure
+      hsc <- fr$p_h |> unlist()
+      est <- fr$p_e |> unlist()
+      coil <- fr$p_c |> unlist()
+      df1 <- data.frame(
+        index = 1:length(hsc),
+        Helix = as.numeric(hsc),
+        Strand = as.numeric(est),
+        Coil = as.numeric(coil)
+      ) |>
+        tidyr::pivot_longer(cols = c("Helix", "Strand", "Coil")) |>
+        dplyr::mutate(
+          value = dplyr::if_else(name == "Coil", -value, value)
+        )
+      
+      p1 <- ggplot(df1, aes(x = index, y = value, fill = name)) +
+        geom_col(alpha = 0.8) +
+        scale_fill_manual(values = c("Helix" = "#91288c", "Strand" = "#ffa500", "Coil" = "gray50")) +
+        theme_minimal() +
+        ggtitle("Secondary Structure Prediction")
+      
+      # Disorder / HCA
+      dis <- fr$p_dis |> unlist()
+      hca <- fr$hca |> unlist()
+      df2 <- data.frame(
+        index = 1:length(dis),
+        Disorder = as.numeric(dis),
+        HCA = as.numeric(hca)
+      ) |>
+        tidyr::pivot_longer(cols = c("Disorder", "HCA")) |>
+        dplyr::mutate(
+          value = dplyr::if_else(name == "Disorder", -value, value)
+        )
+      
+      p2 <- ggplot(df2, aes(x = index, y = value, fill = name)) +
+        geom_col(alpha = 0.8) +
+        scale_fill_manual(values = c("Disorder" = "red", "HCA" = "black")) +
+        theme_minimal() +
+        ggtitle("Disorder & HCA")
+      
+      g <- patchwork::wrap_plots(p1, p2, ncol = 1)
+      
+      ggsave(file, g, width = 10, height = 6, dpi = 300, bg = "white")
+    }
+  )
 }
 
 # Run the application 

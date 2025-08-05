@@ -4,7 +4,8 @@ mod_consurf_1d_ui <- function(id) {
   ns <- NS(id)
   tagList(
     fileInput(ns("consurf_txt"), "Upload ConSurf TXT File", accept = c(".txt")),
-    actionButton(ns("add_consurf"), "Add ConSurf Layer", icon = icon("plus"))
+    checkboxInput(ns("add_consurf"), "Add ConSurf Layer to 1D plot", value = FALSE),
+    downloadButton(ns("download_consurf_plot"), "Download ConSurf Plot (PNG)", icon = icon("download"))
   )
 }
 
@@ -12,24 +13,6 @@ mod_consurf_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    consurf_enabled <- reactiveVal(FALSE)
-    
-    # UI控制：当上传文件存在时才启用按钮
-    observe({
-      if (!is.null(input$consurf_txt)) {
-        shinyjs::enable("add_consurf")
-      } else {
-        shinyjs::disable("add_consurf")
-      }
-    })
-    
-    # 处理启用状态
-    observeEvent(input$add_consurf, {
-      req(consurf_txt_df())
-      consurf_enabled(TRUE)
-    })
-    
-    # 数据读取函数
     read_consurf_txt <- function(file_path) {
       df <- read.delim(file_path, skip = 27, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
       colnames(df) <- trimws(colnames(df))
@@ -54,7 +37,10 @@ mod_consurf_server <- function(id) {
       })
     })
     
-    # 可选图形输出（条形图）
+    consurf_enabled <- reactive({
+      input$add_consurf && !is.null(consurf_txt_df()) && nrow(consurf_txt_df()) > 0
+    })
+    
     consurf_cols <- c(
       "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
       "5" = "#FFFFFF", "6" = "#FBECF1", "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664"
@@ -77,6 +63,29 @@ mod_consurf_server <- function(id) {
         theme_minimal() +
         labs(title = "ConSurf Conservation Score", x = "Residue Position", y = "Score")
     })
+    
+    output$download_consurf_plot <- downloadHandler(
+      filename = function() {
+        paste0("consurf_plot_", Sys.Date(), ".png")
+      },
+      content = function(file) {
+        req(consurf_txt_df())
+        df <- consurf_txt_df()
+        
+        consurf_cols <- c(
+          "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
+          "5" = "#FFFFFF", "6" = "#FBECF1", "7" = "#FAC9DE", "8" = "#F27EAB", "9" = "#A22664"
+        )
+        
+        p <- ggplot(df, aes(x = Position, y = Score, fill = factor(Grade))) +
+          geom_col(width = 1) +
+          scale_fill_manual(values = consurf_cols, name = "ConSurf Grade") +
+          theme_minimal() +
+          labs(title = "ConSurf Conservation Score", x = "Residue Position", y = "Score")
+        
+        ggplot2::ggsave(file, plot = p, width = 10, height = 4, dpi = 300, bg = "white")
+      }
+    )
     
     plot_ui_element <- tagList(
       plotOutput(ns("txt_plot"), height = "400px")

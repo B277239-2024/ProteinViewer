@@ -13,7 +13,8 @@ render_1d_plot <- function(
     vdvp_window = 3,
     gene_name = NULL,
     fells_enabled = FALSE,
-    fells_result = NULL
+    fells_result = NULL,
+    return_plot_only = FALSE
 ) {
   consurf_colors <- c(
     "1" = "#10C8D2", "2" = "#89FDFD", "3" = "#D8FDFE", "4" = "#EAFFFF",
@@ -204,6 +205,14 @@ render_1d_plot <- function(
            "; Gene: ", gene_name)
   } else {
     "User uploaded sequence"
+  }
+  
+  if (return_plot_only) {
+    combined_plot <- p1
+    if (!is.null(p3)) combined_plot <- combined_plot / p3
+    if (!is.null(p4)) combined_plot <- combined_plot / p4
+    combined_plot <- combined_plot / p2
+    return(combined_plot)
   }
   
   plotly::subplot(plots,
