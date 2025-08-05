@@ -26,6 +26,7 @@ source("modules/mod_ptm.R")
 source("modules/mod_gnomad.R")
 source("modules/mod_basicinfo.R")
 source("R/render_1d_plot.R")
+source("R/render_fells_plot.R")
 
 # Define UI for application
 ui <- dashboardPage(
@@ -1063,11 +1064,17 @@ server <- function(input, output, session) {
   outputOptions(output, "fellsAvailable", suspendWhenHidden = FALSE)
   
   observeEvent(input$fells, {
-    data <- bi_res$protein_data()
-    req(data)
+    req(bi_res$seq_source())
     
-    seq <- bi_res$current_sequence()
-    pseq <- paste0(">", bi_res$pid(), "\n", seq)
+    pseq <- if (bi_res$seq_source() == "upload") {
+      paste0(">User_Uploaded\n", bi_res$current_sequence())
+    } else {
+      data <- bi_res$protein_data()
+      req(data)
+      paste0(">", bi_res$pid(), "\n", bi_res$current_sequence())
+    }
+    
+    req(pseq) 
     
     req <- request("http://protein.bio.unipd.it/fellsws/submit") |> 
       req_headers("Content-Type" = "multipart/form-data") |>
@@ -1162,25 +1169,7 @@ server <- function(input, output, session) {
   
   output$fells_plot <- renderPlot({
     req(fells_class() == "btn-success")
-    
-    hsc_cols <- c(Helix = "#91288c", Strand = "#ffa500", Coil = "gray50")
-    dh_cols <- c(Disorder = "red", HCA = "black")
-    
-    p1 <- ggplot(fells_hsc(), aes(index, value, fill = name, alpha = alpha)) +
-      geom_col(position = "identity") +
-      scale_fill_manual(values = hsc_cols) +
-      guides(alpha = "none") +
-      theme_minimal() +
-      ggtitle("Secondary Structure Prediction")
-    
-    p2 <- ggplot(fells_hd(), aes(index, value, fill = name, alpha = alpha)) +
-      geom_col(position = "identity") +
-      scale_fill_manual(values = dh_cols) +
-      guides(alpha = "none") +
-      theme_minimal() +
-      ggtitle("Disorder & HCA")
-    
-    patchwork::wrap_plots(p1, p2, ncol = 1)
+    render_fells_plot(fells_hsc(), fells_hd(), use_alpha = TRUE)
   })
   
   output$fells_download_ui <- renderUI({
@@ -1196,52 +1185,9 @@ server <- function(input, output, session) {
       paste0("fells_plot_", Sys.Date(), ".png")
     },
     content = function(file) {
-      fr <- fells_result()
-      req(fr)
-      
-      # Secondary structure
-      hsc <- fr$p_h |> unlist()
-      est <- fr$p_e |> unlist()
-      coil <- fr$p_c |> unlist()
-      df1 <- data.frame(
-        index = 1:length(hsc),
-        Helix = as.numeric(hsc),
-        Strand = as.numeric(est),
-        Coil = as.numeric(coil)
-      ) |>
-        tidyr::pivot_longer(cols = c("Helix", "Strand", "Coil")) |>
-        dplyr::mutate(
-          value = dplyr::if_else(name == "Coil", -value, value)
-        )
-      
-      p1 <- ggplot(df1, aes(x = index, y = value, fill = name)) +
-        geom_col(alpha = 0.8) +
-        scale_fill_manual(values = c("Helix" = "#91288c", "Strand" = "#ffa500", "Coil" = "gray50")) +
-        theme_minimal() +
-        ggtitle("Secondary Structure Prediction")
-      
-      # Disorder / HCA
-      dis <- fr$p_dis |> unlist()
-      hca <- fr$hca |> unlist()
-      df2 <- data.frame(
-        index = 1:length(dis),
-        Disorder = as.numeric(dis),
-        HCA = as.numeric(hca)
-      ) |>
-        tidyr::pivot_longer(cols = c("Disorder", "HCA")) |>
-        dplyr::mutate(
-          value = dplyr::if_else(name == "Disorder", -value, value)
-        )
-      
-      p2 <- ggplot(df2, aes(x = index, y = value, fill = name)) +
-        geom_col(alpha = 0.8) +
-        scale_fill_manual(values = c("Disorder" = "red", "HCA" = "black")) +
-        theme_minimal() +
-        ggtitle("Disorder & HCA")
-      
-      g <- patchwork::wrap_plots(p1, p2, ncol = 1)
-      
-      ggsave(file, g, width = 10, height = 6, dpi = 300, bg = "white")
+      req(fells_class() == "btn-success")
+      g <- render_fells_plot(fells_hsc(), fells_hd(), use_alpha = FALSE)
+      ggsave(file, plot = g, width = 10, height = 6, dpi = 300, bg = "white")
     }
   )
 }
