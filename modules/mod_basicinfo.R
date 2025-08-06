@@ -81,7 +81,8 @@ mod_basicinfo_server <- function(id) {
     
     output$custom_domain_table <- rhandsontable::renderRHandsontable({
       req(input$use_custom_domain)
-      rhandsontable::rhandsontable(domain_table_data(), rowHeaders = NULL)
+      rhandsontable::rhandsontable(domain_table_data(), rowHeaders = NULL) %>%
+        rhandsontable::hot_cols(colWidths = 110)
     })
     
     # Fetch UniProt JSON

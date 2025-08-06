@@ -25,8 +25,11 @@ source("modules/mod_consurf.R")
 source("modules/mod_ptm.R")
 source("modules/mod_gnomad.R")
 source("modules/mod_basicinfo.R")
+source("modules/mod_comparison.R")
 source("R/render_1d_plot.R")
 source("R/render_fells_plot.R")
+source("R/api_helper.R")
+source("R/render_1d_plot_comparison.R")
 
 # Define UI for application
 ui <- dashboardPage(
@@ -46,7 +49,9 @@ ui <- dashboardPage(
                          menuSubItem("FELLS Plot", tabName = "tab_fells")
                 ),
                 
-                menuItem("3D Structure", tabName = "tab_3d", icon = icon("cube"))
+                menuItem("3D Structure", tabName = "tab_3d", icon = icon("cube")), 
+                
+                menuItem("Comparison", tabName = "tab_comparison", icon = icon("project-diagram"))
     )
   ),
   
@@ -185,6 +190,18 @@ ui <- dashboardPage(
                        uiOutput("consurf_legend_ui")
                 )
               )
+      ),
+      
+      tabItem(tabName = "tab_comparison",
+              fluidRow(
+                column(4,
+                       mod_comparison_ui("comparison1")
+                ),
+                column(8,
+                       h4("Comparison Plot"),
+                       uiOutput("comparison1-comparison_plot_ui")
+                )
+              )
       )
     )
   )
@@ -202,7 +219,7 @@ server <- function(input, output, session) {
                                   gnomad_upload = reactive({ bi_res$gnomad_upload() })
   )
   gnomad_df <- gnomad_res$gnomad_df
-  
+  mod_comparison_server("comparison1")
   
   
   
@@ -282,7 +299,6 @@ server <- function(input, output, session) {
     seq_lines <- substring(seq, line_starts, line_starts + line_width - 1)
     seq_lines <- sprintf("%03d  %s", line_starts, seq_lines)
     formatted <- paste(seq_lines, collapse = "\n")
-    print(formatted)
     tags$pre(
       style = "font-family: Courier, monospace; font-size: 13px; white-space: pre-wrap; word-break: break-word;
     max-width: 550px; background-color: #f8f8f8; padding: 10px; border-radius: 4px; overflow-x: auto;", HTML(formatted)
