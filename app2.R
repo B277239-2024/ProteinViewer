@@ -161,14 +161,19 @@ ui <- dashboardPage(
                        checkboxInput("spin", "Spin Structure", value = FALSE),
                        checkboxInput("surface", "Show Surface", value = FALSE),
                        checkboxInput("labels", "Show Mutation Labels", value = FALSE),
+                       helpText("Display the positions of missense variants on the structure."),
                        
                        fileInput("consurf_pdb_upload", "Upload ConSurf PDB", accept = ".pdb"),
+                       helpText("Make sure you have uploaded the .txt file on the ConSurf Plot page."),
                        checkboxInput("toggle_consurf_3d", "Show ConSurf on 3D", value = FALSE),
                        
                        numericInput("first", "First Residue", value = 1, min = 1),
                        numericInput("last", "Last Residue", value = NULL, min = 1),
-                       actionButton("selectSpheres", "Highlight Variants with Spheres"),
-                       
+                       checkboxInput("selectSpheres", "Highlight Variants with Spheres", value = FALSE),
+                       helpText("Highlight missense variants.",
+                                br(),
+                                "If AlphaMissense data is available, variant spheres will reflect predicted pathogenicity."),
+                       hr(),
                        sliderInput(
                          "set_slab",
                          "Set slab viewing depth",
@@ -183,6 +188,9 @@ ui <- dashboardPage(
                 
                 column(8,
                        h4("3D Structure Viewer"),
+                       helpText("Alphafold structural information is based on the canonical transcript ID.", 
+                                br(),
+                                "If you use a different transcript, mismatches or incomplete mapping may occur."),
                        textOutput("structure_info"),
                        r3dmolOutput("structure_view", height = "500px"),
                        downloadButton("download_pdb", "Download PDB File"),
@@ -220,9 +228,6 @@ server <- function(input, output, session) {
   )
   gnomad_df <- gnomad_res$gnomad_df
   mod_comparison_server("comparison1")
-  
-  
-  
   
   output$consurf_plot_ui <- renderUI({
     consurf_res$plot_ui
@@ -832,55 +837,66 @@ server <- function(input, output, session) {
   radii_3d <- c(1.15, 1.5, 1.85, 2.15, 2.5, 2.85)
   render_legend <- reactiveVal(FALSE)
   
-  observeEvent(input$selectSpheres, {
-    render_legend(TRUE)
-    df <- missense_df_3d()
-    req(nrow(df) > 0)
-    # AF groups
-    df <- df %>%
-      filter(!is.na(AF)) %>%
-      mutate(
-        LogAF = ifelse(AF > 0, log10(AF * 1e6), -6),
-        AF_Group = case_when(
-          LogAF <= 1 ~ 1,
-          LogAF <= 2 ~ 2,
-          LogAF <= 3 ~ 3,
-          LogAF <= 4 ~ 4,
-          LogAF <= 5 ~ 5,
-          TRUE       ~ 6)
-      )
-    
-    # with alphamissense
-    if (am_res$am_source() == "upload" && !is.null(am_res$upload_info())) {
-      alpha_df <- am_res$alphamissense_df()
-      df$protein_variant <- sapply(df$HGVSp, extract_protein_variant)
-      
+  observe({
+    if(input$selectSpheres){
+      render_legend(TRUE)
+      df <- missense_df_3d()
+      req(nrow(df) > 0)
+      # AF groups
       df <- df %>%
-        left_join(alpha_df %>% select(protein_variant, score), by = "protein_variant")
+        filter(!is.na(AF)) %>%
+        mutate(
+          LogAF = ifelse(AF > 0, log10(AF * 1e6), -6),
+          AF_Group = case_when(
+            LogAF <= 1 ~ 1,
+            LogAF <= 2 ~ 2,
+            LogAF <= 3 ~ 3,
+            LogAF <= 4 ~ 4,
+            LogAF <= 5 ~ 5,
+            TRUE       ~ 6)
+        )
       
-      df$Color <- ifelse(is.na(df$score), "#AAAAAA", score_to_color(df$score))
-      
-      # keep the variants with highest score
-      df_grouped <- df %>%
-        group_by(AA_Position) %>%
-        summarise(
-          radius = radii_3d[max(AF_Group, na.rm = TRUE)],
-          color = Color[which.max(score)],
-          .groups = "drop")
-    } else if(am_res$am_source() == "api"){
-      alpha_df <- am_res$alphamissense_df()
-      if (!is.null(alpha_df) && nrow(alpha_df) > 0) {
+      # with alphamissense
+      if (am_res$am_source() == "upload" && !is.null(am_res$upload_info())) {
+        alpha_df <- am_res$alphamissense_df()
         df$protein_variant <- sapply(df$HGVSp, extract_protein_variant)
+        
         df <- df %>%
           left_join(alpha_df %>% select(protein_variant, score), by = "protein_variant")
+        
         df$Color <- ifelse(is.na(df$score), "#AAAAAA", score_to_color(df$score))
+        
+        # keep the variants with highest score
         df_grouped <- df %>%
           group_by(AA_Position) %>%
           summarise(
             radius = radii_3d[max(AF_Group, na.rm = TRUE)],
             color = Color[which.max(score)],
             .groups = "drop")
+      } else if(am_res$am_source() == "api"){
+        alpha_df <- am_res$alphamissense_df()
+        if (!is.null(alpha_df) && nrow(alpha_df) > 0) {
+          df$protein_variant <- sapply(df$HGVSp, extract_protein_variant)
+          df <- df %>%
+            left_join(alpha_df %>% select(protein_variant, score), by = "protein_variant")
+          df$Color <- ifelse(is.na(df$score), "#AAAAAA", score_to_color(df$score))
+          df_grouped <- df %>%
+            group_by(AA_Position) %>%
+            summarise(
+              radius = radii_3d[max(AF_Group, na.rm = TRUE)],
+              color = Color[which.max(score)],
+              .groups = "drop")
+        } else {
+          df_grouped <- df %>%
+            group_by(AA_Position) %>%
+            summarise(
+              af_group = max(AF_Group, na.rm = TRUE),
+              radius = radii_3d[af_group],
+              color = cols_3d[af_group],
+              .groups = "drop")
+        }
       } else {
+        # no AlphaMissense (upload empty or API fail)
         df_grouped <- df %>%
           group_by(AA_Position) %>%
           summarise(
@@ -889,26 +905,22 @@ server <- function(input, output, session) {
             color = cols_3d[af_group],
             .groups = "drop")
       }
+      
+      # Spheres
+      for (i in seq_len(nrow(df_grouped))) {
+        m_add_style(
+          id = "structure_view",
+          sel = m_sel(resi = df_grouped$AA_Position[i], atom = "CA"),
+          style = m_style_sphere(
+            color = df_grouped$color[i],
+            radius = df_grouped$radius[i],
+            colorScheme = "none"))}
     } else {
-      # no AlphaMissense (upload empty or API fail)
-      df_grouped <- df %>%
-        group_by(AA_Position) %>%
-        summarise(
-          af_group = max(AF_Group, na.rm = TRUE),
-          radius = radii_3d[af_group],
-          color = cols_3d[af_group],
-          .groups = "drop")
+      render_legend(FALSE)
+      m_set_style(id = "structure_view", sel = m_sel(atom = "CA"), style = m_style_cartoon(color = "spectrum"))
     }
     
-    # Spheres
-    for (i in seq_len(nrow(df_grouped))) {
-      m_add_style(
-        id = "structure_view",
-        sel = m_sel(resi = df_grouped$AA_Position[i], atom = "CA"),
-        style = m_style_sphere(
-          color = df_grouped$color[i],
-          radius = df_grouped$radius[i],
-          colorScheme = "none"))}
+    
   })
   
   # Spheres legend

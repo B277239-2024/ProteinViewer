@@ -15,22 +15,27 @@ mod_basicinfo_ui <- function(id) {
       tagList(
         fileInput(ns("fasta_upload"), "Upload FASTA File", accept = c(".fasta", ".fa"),
                   placeholder = "Upload a FASTA file"),
-        
-        fileInput(ns("gnomad_upload"), "Upload gnomAD-like CSV",
-                  accept = c(".csv"),
+        helpText("FASTA File provides the sequence information. "),
+        hr(),
+        fileInput(ns("gnomad_upload"), "Upload gnomAD-like CSV", accept = c(".csv"),
                   placeholder = "Optional variant CSV with HGVSp column"),
-        helpText("Must contain HGVSp column like 'p.Arg12Cys'.")
+        helpText("CSV must contain HGVSp column like 'p.Arg12Cys'.", 
+                 br(),
+                 "CSV File provides the variants information. "),
+        hr()
       )
     ),
     actionButton(ns("fetch"), "Fetch info"),
-    tags$div(style = "margin-top: 10px;"), 
+    hr(),
     conditionalPanel(
       condition = sprintf("input['%s'] == 'api'", ns("seq_source")),
-      selectInput(ns("selected_transcript"), "Select Transcript", choices = NULL)
+      selectInput(ns("selected_transcript"), "Select Transcript", choices = NULL),
+      helpText("The default transcript is the first canonical one.", 
+               br(),
+               "You can choose a different transcript id from the dropdown.")
     ),
     tags$hr(),
     checkboxInput(ns("use_custom_domain"), "Use your own domain info", value = FALSE),
-    
     conditionalPanel(
       condition = sprintf("input['%s'] == true", ns("use_custom_domain")),
       tagList(
@@ -39,9 +44,16 @@ mod_basicinfo_ui <- function(id) {
           column(6, actionButton(ns("add_row"), "Add Row", icon = icon("plus"))),
           column(6, actionButton(ns("clear_table"), "Clear Table", icon = icon("trash")))
         ),
-        helpText("Enter columns: Description (text), Start (integer), End (integer)")
+        helpText("Enter columns: Description (text), Start (integer), End (integer)",
+                 br(),
+                 "Rows with missing values will be ignored. ")
       )
-    )
+    ),
+    helpText("Domain info from API is retrieved from UniProt.",br(),
+             "For more accurate domain definitions, visit:",br(),
+             "https://alphafold.ebi.ac.uk/entry/your_uniprot_id", br(),
+             "and refer to TED Domains and Predicted Aligned Error (PAE).", br(),
+             "You may enter domains manually if needed.")
   )
 }
 
