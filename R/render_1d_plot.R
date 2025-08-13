@@ -36,6 +36,14 @@ render_1d_plot <- function(
                          aes(xmin = start, xmax = end, ymin = 0.45, ymax = 0.55,
                              text = paste0("Domain: ", description, "\n", start, " - ", end)),
                          fill = "#fca6a6")
+    domain_df$label_x <- (domain_df$start + domain_df$end) / 2
+    domain_df$label_y <- 0.56 
+    p1 <- p1 +
+      ggplot2::geom_text(
+        data = domain_df,
+        aes(x = label_x, y = label_y, label = description),
+        size = 3, vjust = 0, inherit.aes = FALSE
+      )
   }
   
   if (nrow(missense_df) > 0) {
@@ -132,7 +140,8 @@ render_1d_plot <- function(
       ggplot2::scale_fill_manual(values = c("Helix" = "#91288c", "Strand" = "#ffa500", "Coil" = "gray50")) +
       ggplot2::theme_minimal() +
       ggplot2::theme(axis.title.x = element_blank()) +
-      ggplot2::ggtitle("Secondary Structure Prediction")
+      ggplot2::ggtitle("Secondary Structure Prediction") +
+      ggplot2::labs(y = "Prob.")
     
     # Disorder / HCA
     dis <- fells_result$p_dis |> unlist()
@@ -149,7 +158,8 @@ render_1d_plot <- function(
       ggplot2::geom_col(alpha = 0.8) +
       ggplot2::scale_fill_manual(values = c("Disorder" = "red", "HCA" = "black")) +
       ggplot2::theme_minimal() +
-      ggplot2::ggtitle("Disorder & HCA")
+      ggplot2::ggtitle("Disorder & HCA") +
+      ggplot2::labs(y = "Score (±)")
   }
   
   mut_index <- missense_df$AA_Position |> unique()

@@ -31,18 +31,18 @@ mod_comparison_server <- function(id) {
     ns <- session$ns
     
     uid_table_data <- reactiveVal(
-      data.frame(UniProtID = "", stringsAsFactors = FALSE)
+      data.frame(UniProtID = "", TranscriptID = "", stringsAsFactors = FALSE)
     )
     
     observeEvent(input$add_uid, {
       df <- uid_table_data()
-      df <- rbind(df, data.frame(UniProtID = "", stringsAsFactors = FALSE))
+      df <- rbind(df, data.frame(UniProtID = "", TranscriptID = "", stringsAsFactors = FALSE))
       uid_table_data(df)
     })
     
     output$uid_table <- rhandsontable::renderRHandsontable({
       rhandsontable::rhandsontable(uid_table_data(), rowHeaders = NULL) %>%
-        rhandsontable::hot_cols(colWidths = 200)
+        rhandsontable::hot_cols(colWidths = c(100, 150))
     })
     
     observeEvent(input$uid_table, {
@@ -67,13 +67,18 @@ mod_comparison_server <- function(id) {
           ptm_df = if ("PTM" %in% input$features) get_ptm_data(protein_data) else NULL,
           missense_df = if ("Missense" %in% input$features) {
             tx_df <- tryCatch(get_transcripts_by_uniprot(uid), error = function(e) NULL)
-            tx_id <- tx_df$ensembl_transcript_id[which(tx_df$transcript_is_canonical == 1)][1]
-            if (!is.null(tx_id) && !is.na(tx_id)) {
-              get_gnomad_variants_for_transcript(tx_id)
-              # cat("Comparison transcript:", tx_id)
+            # test
+            user_tx <- df$TranscriptID[df$UniProtID == uid][1]
+            if (!is.null(user_tx) && nzchar(user_tx)) {
+              get_gnomad_variants_for_transcript(user_tx)
             } else {
-              NULL
-            }
+              tx_id <- tx_df$ensembl_transcript_id[which(tx_df$transcript_is_canonical == 1)][1]
+              if (!is.null(tx_id) && !is.na(tx_id)) {
+                get_gnomad_variants_for_transcript(tx_id)
+                # cat("Comparison transcript:", tx_id)
+              } else {
+                NULL
+              }}
           } else NULL,
           am_df = if ("AlphaMissense" %in% input$features) get_alphamissense_data(uid) else NULL
         )

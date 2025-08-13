@@ -61,8 +61,15 @@ ui <- dashboardPage(
     tabItems(
       tabItem(tabName = "tab_protein",
               fluidRow(
-                column(4, mod_basicinfo_ui("bi")),
+                column(4, mod_basicinfo_ui("bi"),
+                       tags$div(
+                         style = "margin-bottom: 8px;",
+                         tags$strong("Try example data (Q9Y6K1): "),
+                         downloadButton("download_example_bundle", "Download example bundle (ZIP)")
+                       )),
                 column(8,
+                       helpText("Data sources: UniProt (sequence/domains), Ensembl/biomaRt (transcripts).", br(),
+                                "Click 'Fetch info' after entering the UniProt ID."),
                        h4("Protein Info"),
                        tableOutput("info"),
                        h4("Sequence"),
@@ -78,6 +85,8 @@ ui <- dashboardPage(
       tabItem(tabName = "tab_gnomad",
               fluidRow(
                 column(12,
+                       helpText("Data source: gnomAD GraphQL (GRCh38).", br(), 
+                                "Variants are filtered/annotated and AA positions are parsed from HGVSp."),
                        h4("GnomAD Summary"),
                        uiOutput("gnomad_summary"),
                        h4("GnomAD Variant Table"),
@@ -91,12 +100,17 @@ ui <- dashboardPage(
                 column(4,
                        mod_ptm_ui("ptm1"),
                        sliderInput("vdvp_window", "Window Size", min = 0.01, max = 100, value = 3, step = 0.5),
-                       helpText("Window size < 1 == fraction of the protein length"),
+                       helpText("This slider controls ONLY the Vd/Vp curve (local variant density / global variant proportion) smoothing window.",
+                                br(),
+                                "If < 1, it is a fraction of protein length; otherwise it is an absolute residue count."),
                        
                        br(),
                        uiOutput("plot_legend")
                 ),
                 column(8,
+                       helpText("Layers: protein length (grey), UniProt domains (pink), missense variants (blue),", br(),
+                                "optional PTMs (colored dots), ConSurf grades (colored bars), AlphaMissense (green bars), and Vd/Vp curve.", br(),
+                                "Vd/Vp is the local variant density divided by global variant proportion."),
                        h4("Variant 1D Plot"),
                        plotlyOutput("variant_1dplot", height="600px"),
                        downloadButton("download_1dplot", "Download 1D Plot (PNG)", icon = icon("download"))
@@ -110,6 +124,8 @@ ui <- dashboardPage(
                        mod_consurf_1d_ui("consurf1")
                 ),
                 column(8,
+                       helpText("Upload ConSurf TXT (and optional PDB for 3D). The TXT is parsed (Position/Score/Grade) and visualized as a bar plot.", br(),
+                                "Please get the Consurf files in this web page: https://consurf.tau.ac.il/consurf_index.php"),
                        h4("ConSurf Conservation Scores"),
                        uiOutput("consurf_plot_ui")
                 )
@@ -122,6 +138,8 @@ ui <- dashboardPage(
                        mod_alphamissense_ui("am1")
                 ),
                 column(8,
+                       helpText("Data source: AlphaFold DB (API) or uploaded CSV. Heatmap shows per-position missense pathogenicity scores.", br(),
+                                "You can visit the AlphaFold website to download the 'AlphaMissense data - Heatmap data' CSV file corresponding to the Uniprot ID."),
                        h4("AlphaMissense Heatmap"),
                        plotlyOutput("alphamissense_heatmap", height = "500px")
                 )
@@ -136,6 +154,8 @@ ui <- dashboardPage(
                        uiOutput("fells_download_ui")
                 ),
                 column(8,
+                       helpText("Data source: FELLS web service.", br(), 
+                                "Probabilities of Helix/Strand/Coil and Disorder/HCA are visualized."),
                        h4("FELLS Secondary Structure"),
                        plotOutput("fells_plot", height = "500px")
                 )
@@ -187,6 +207,8 @@ ui <- dashboardPage(
                 ),
                 
                 column(8,
+                       helpText("Structures: AlphaFold (canonical), PDB entries, or uploaded PDB.", br(),
+                                "Variant spheres/labels can be toggled; AlphaMissense colors indicate predicted pathogenicity when available."),
                        h4("3D Structure Viewer"),
                        helpText("Alphafold structural information is based on the canonical transcript ID.", 
                                 br(),
@@ -206,6 +228,9 @@ ui <- dashboardPage(
                        mod_comparison_ui("comparison1")
                 ),
                 column(8,
+                       helpText("Note: gnomAD variants are fetched for the canonical transcript by default.", br(),
+                                "You can optionally supply a TranscriptID per row to override.", br(),
+                                "Click 'Run Comparison' after entering the UniProt IDs."),
                        h4("Comparison Plot"),
                        uiOutput("comparison1-comparison_plot_ui")
                 )
@@ -254,6 +279,20 @@ server <- function(input, output, session) {
   })
   
   # Basic info output
+  output$download_example_bundle <- downloadHandler(
+    filename = function() {
+      "Q9Y6K1_example_bundle.zip"
+    },
+    content = function(file) {
+      download.file(
+        url      = "https://raw.githubusercontent.com/B277239-2024/Shinyapp/master/Q9Y6K1_example_bundle.zip",
+        destfile = file,
+        mode     = "wb",
+        quiet    = TRUE
+      )
+    }
+  )
+  
   output$info <- renderTable({
     if (bi_res$seq_source() == "upload") {
       seq <- bi_res$current_sequence()
@@ -641,18 +680,18 @@ server <- function(input, output, session) {
   
   # 3D structure with r3dmol
   output$structure_view <- renderR3dmol({
-    req(input$structure_source)
-    
     if (input$structure_source == "Upload") {
       shiny::validate(
         need(!is.null(input$pdb_upload), "Please upload a PDB file.")
       )
     } else {
       shiny::validate(
-        need(input$structure_source != "Upload" && (!isTruthy(input$fetch)), "Please click Fetch after entering UniProt ID.")
+        need(!is.null(bi_res$current_sequence()) && nzchar(bi_res$current_sequence()),  
+             "Please click Fetch after entering UniProt ID.")
       )
     }
     
+    req(input$structure_source)
     uniprot_id <- bi_res$pid()
     pdb_data <- NULL
     
