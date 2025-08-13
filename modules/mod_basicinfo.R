@@ -8,7 +8,7 @@ mod_basicinfo_ui <- function(id) {
                  selected = "api", inline = TRUE),
     conditionalPanel(
       condition = sprintf("input['%s'] == 'api'", ns("seq_source")),
-      textInput(ns("pid"), "Enter UniProt ID", value = "Q9Y6K1")
+      textInput(ns("pid"), "Enter UniProt ID", value = "", placeholder = "Q9Y6K1")
     ),
     conditionalPanel(
       condition = sprintf("input['%s'] == 'upload'", ns("seq_source")),
