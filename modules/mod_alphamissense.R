@@ -111,7 +111,7 @@ mod_alphamissense_server <- function(id, pid) {
         paste0("alphamissense_heatmap_", Sys.Date(), ".png")
       },
       content = function(file) {
-        req(am_res$alphamissense_df())
+        req(alphamissense_df())
         df <- alphamissense_df()
         
         filter_vals <- input$am_prediction_filter
